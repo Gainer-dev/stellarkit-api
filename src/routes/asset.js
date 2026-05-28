@@ -1,8 +1,98 @@
 const express = require("express");
 const router = express.Router();
+const { Asset } = require("@stellar/stellar-sdk");
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
-const { validateAccountId, validateAssetCode } = require("../utils/validators");
+const { assetHoldersRateLimiter } = require("../middleware/rateLimiter");
+const {
+  validateAccountId,
+  validateAssetCode,
+  validateLimit,
+} = require("../utils/validators");
+
+function findAssetBalance(account, assetCode, issuer) {
+  return (account.balances || []).find(
+    (balance) =>
+      balance.asset_code === assetCode && balance.asset_issuer === issuer,
+  );
+}
+
+function formatAssetHolder(account, assetCode, issuer) {
+  const balance = findAssetBalance(account, assetCode, issuer);
+
+  return {
+    accountId: account.id || account.account_id,
+    balance: balance ? balance.balance : "0.0000000",
+    limit: balance ? balance.limit : null,
+    buyingLiabilities: balance ? balance.buying_liabilities : "0.0000000",
+    sellingLiabilities: balance ? balance.selling_liabilities : "0.0000000",
+    isAuthorized: balance ? balance.is_authorized : null,
+    isAuthorizedToMaintainLiabilities: balance
+      ? balance.is_authorized_to_maintain_liabilities
+      : null,
+    isClawbackEnabled: balance ? balance.is_clawback_enabled : null,
+    lastModifiedLedger: account.last_modified_ledger,
+  };
+}
+
+/**
+ * GET /asset/:code/:issuer/holders
+ * Returns paginated accounts that hold a trustline for a specific asset.
+ *
+ * Query params:
+ *   - limit   (number, default: 10, max: 200)
+ *   - cursor  (string, pagination cursor from previous response)
+ *   - order   ("asc" | "desc", default: "desc")
+ *
+ * @example
+ * GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/holders
+ */
+router.get(
+  "/:code/:issuer/holders",
+  assetHoldersRateLimiter,
+  async (req, res, next) => {
+    try {
+      const { code, issuer } = req.params;
+      validateAssetCode(code);
+      validateAccountId(issuer);
+
+      const assetCode = code.toUpperCase();
+      const limit = validateLimit(req.query.limit || 10, 200);
+      const order = ["asc", "desc"].includes(req.query.order)
+        ? req.query.order
+        : "desc";
+      const cursor = req.query.cursor || undefined;
+
+      let query = server
+        .accounts()
+        .forAsset(new Asset(assetCode, issuer))
+        .limit(limit)
+        .order(order);
+
+      if (cursor) query = query.cursor(cursor);
+
+      const accountsResponse = await query.call();
+      const records = accountsResponse.records || [];
+      const holders = records.map((account) =>
+        formatAssetHolder(account, assetCode, issuer),
+      );
+      const lastRecord = records[records.length - 1];
+      const nextCursor = lastRecord ? lastRecord.paging_token : null;
+
+      return success(res, holders, {
+        meta: {
+          count: holders.length,
+          limit,
+          order,
+          nextCursor,
+          hasMore: holders.length === limit,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 /**
  * GET /asset/:code/:issuer

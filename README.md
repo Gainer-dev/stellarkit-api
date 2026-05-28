@@ -210,6 +210,23 @@ GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
 
 ---
 
+### `GET /asset/:code/:issuer/holders`
+Returns paginated accounts holding a trustline for a specific Stellar asset.
+
+**Query params:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | number | `10` | Number of holders (max 200) |
+| `order` | string | `desc` | `asc` or `desc` |
+| `cursor` | string | — | Pagination cursor from previous response |
+
+**Example:**
+```
+GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/holders
+```
+
+---
+
 ### `GET /asset/search?code=:code`
 Searches for all assets with a given code across all issuers.
 

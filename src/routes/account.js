@@ -3,6 +3,7 @@ const router = express.Router();
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
 const { validateAccountId, validateLimit } = require("../utils/validators");
+const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 
 function formatAccountBalances(account) {
   const xlmBalance = account.balances.find((b) => b.asset_type === "native");
@@ -105,7 +106,7 @@ router.get("/:id/balances", async (req, res, next) => {
   }
 });
 
-router.get("/:id/summary", async (req, res, next) => {
+router.get("/:id/summary", accountSummaryRateLimiter, async (req, res, next) => {
   try {
     const { id } = req.params;
     validateAccountId(id);

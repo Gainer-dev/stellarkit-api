@@ -133,6 +133,23 @@ Searches for assets by code and returns matching results, including issuer detai
 
 ---
 
+## Common Horizon Errors
+
+These are common Horizon transaction and operation result codes developers may see when submitting transactions to the Stellar network.
+
+| Error code | Meaning | How to fix it |
+|------------|---------|---------------|
+| `tx_bad_seq` | The transaction sequence number does not match the account's current sequence number. | Reload the source account from Horizon before building the transaction, then rebuild and sign it with the latest sequence number. |
+| `tx_insufficient_fee` | The transaction fee is too low for the number of operations or current network conditions. | Increase the transaction fee, use the current base fee from Horizon, and multiply it by the number of operations in the transaction. |
+| `op_no_trust` | The destination account does not have a trustline for the asset being sent. | Have the destination account create a trustline for the asset before sending the payment. |
+| `op_line_full` | The destination trustline exists but does not have enough remaining limit to receive the asset. | Ask the destination account to raise its trustline limit or reduce the payment amount. |
+| `op_no_destination` | The destination account does not exist on the network. | Create the account first with a `createAccount` operation, or confirm the destination public key is correct. |
+| `tx_bad_auth` | The transaction is missing a required signature or has an invalid signature. | Sign with every required signer for the source account and operations, and confirm the correct network passphrase is used. |
+| `op_underfunded` | The source account does not have enough funds to complete the operation. | Add funds to the source account, reduce the operation amount, or account for fees and minimum reserve requirements. |
+| `op_low_reserve` | The operation would leave the account below its required minimum XLM reserve. | Keep more XLM in the account, remove unused subentries, or reduce the operation so the account stays above minimum reserve. |
+
+---
+
 ## Example Responses
 
 ### Health

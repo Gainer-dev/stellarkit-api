@@ -228,6 +228,123 @@ router.get("/:id/freeze-status/:assetCode/:assetIssuer", async (req, res, next) 
 });
 
 /**
+ * GET /account/:id/can-receive/:assetCode/:assetIssuer
+ * Checks whether a Stellar account can receive a specific asset.
+ *
+ * Verifies:
+ * - Trustline existence (except for native XLM)
+ * - Authorization status
+ * - Available capacity before a payment is attempted
+ *
+ * @param {string} id - Stellar account public key (G...)
+ * @param {string} assetCode - Asset code to check (e.g. USD)
+ * @param {string} assetIssuer - Asset issuer public key or native
+ */
+router.get("/:id/can-receive/:assetCode/:assetIssuer", async (req, res, next) => {
+  try {
+    const { id, assetCode, assetIssuer } = req.params;
+    validateAccountId(id);
+    validateAssetCode(assetCode);
+
+    const normalizedAssetCode = assetCode.toUpperCase();
+    const normalizedAssetIssuer =
+      normalizedAssetCode === "XLM" ? assetIssuer.toLowerCase() : assetIssuer;
+
+    if (normalizedAssetCode === "XLM") {
+      if (normalizedAssetIssuer !== "native") {
+        const err = new Error('Invalid asset issuer for XLM. Use "native" as the issuer.');
+        err.isValidation = true;
+        throw err;
+      }
+    } else {
+      validateAccountId(assetIssuer);
+    }
+
+    const account = await server.loadAccount(id);
+    const reasons = [];
+
+    // For native XLM, always allowed if account exists
+    if (normalizedAssetCode === "XLM") {
+      return success(res, {
+        accountId: account.id,
+        asset: {
+          assetCode: "XLM",
+          assetIssuer: "native",
+        },
+        canReceive: true,
+        reasons: [],
+        trustlineExists: true,
+        isAuthorized: true,
+        availableCapacity: null,
+        currentBalance: parseFloat(
+          account.balances.find((b) => b.asset_type === "native")?.balance || "0"
+        ),
+        limit: null,
+      });
+    }
+
+    // For non-native assets, check trustline
+    const trustline = account.balances.find(
+      (b) =>
+        b.asset_type !== "native" &&
+        b.asset_code === normalizedAssetCode &&
+        b.asset_issuer === assetIssuer
+    );
+
+    if (!trustline) {
+      reasons.push("No trustline exists for this asset.");
+      return success(res, {
+        accountId: account.id,
+        asset: {
+          assetCode: normalizedAssetCode,
+          assetIssuer: assetIssuer,
+        },
+        canReceive: false,
+        reasons,
+        trustlineExists: false,
+        isAuthorized: false,
+        availableCapacity: 0,
+        currentBalance: 0,
+        limit: 0,
+      });
+    }
+
+    const isAuthorized = trustline.is_authorized === true;
+    if (!isAuthorized) {
+      reasons.push("Trustline is not authorized by the issuer.");
+    }
+
+    const currentBalance = parseFloat(trustline.balance || "0");
+    const limit = parseFloat(trustline.limit || "0");
+    const buyingLiabilities = parseFloat(trustline.buying_liabilities || "0");
+    const availableCapacity = Math.max(0, limit - currentBalance - buyingLiabilities);
+
+    if (availableCapacity === 0) {
+      reasons.push("No available capacity on trustline (limit reached or fully utilized).");
+    }
+
+    const canReceive = isAuthorized && availableCapacity > 0;
+
+    return success(res, {
+      accountId: account.id,
+      asset: {
+        assetCode: normalizedAssetCode,
+        assetIssuer: assetIssuer,
+      },
+      canReceive,
+      reasons,
+      trustlineExists: true,
+      isAuthorized,
+      availableCapacity,
+      currentBalance,
+      limit,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
  * GET /account/:id/sequence
  * Returns only the current sequence number for a Stellar account.
  *
@@ -680,6 +797,142 @@ router.post("/:id/validate-signers", async (req, res, next) => {
     handleAccountNotFound(err, next);
   }
 });
+
+/**
+ * POST /account/:id/multisig-plan
+ * Plans multisig transactions by calculating signer combinations that meet each threshold.
+ *
+ * Body: { availableSigners: ["G...", "G..."] }
+ *
+ * Returns the minimum signer sets needed to meet each threshold level.
+ *
+ * @param {string} id - Stellar account public key (G...)
+ *
+ * @example
+ * POST /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/multisig-plan
+ * Body: { "availableSigners": ["GBA...", "GBC..."] }
+ */
+router.post("/:id/multisig-plan", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const { availableSigners } = req.body;
+    if (!availableSigners || !Array.isArray(availableSigners)) {
+      const err = new Error("availableSigners must be an array of public keys.");
+      err.status = 400;
+      return next(err);
+    }
+
+    // Validate each signer key
+    for (const signerKey of availableSigners) {
+      try {
+        validateAccountId(signerKey);
+      } catch (e) {
+        const err = new Error(`Invalid signer key: "${signerKey}".`);
+        err.status = 400;
+        return next(err);
+      }
+    }
+
+    const account = await server.loadAccount(id);
+    const accountSigners = account.signers || [];
+    const thresholds = account.thresholds;
+
+    // Filter to only signers that are in the availableSigners list
+    const availableMatches = availableSigners
+      .map(key => accountSigners.find(s => s.key === key))
+      .filter(Boolean);
+
+    // Extract signer weights
+    const signerWeights = availableMatches.map(s => ({
+      key: s.key,
+      weight: s.weight,
+      type: s.type
+    }));
+
+    // Generate minimal combinations for each threshold
+    const validCombinations = {
+      low: findMinimalCombinations(availableMatches, thresholds.low_threshold),
+      med: findMinimalCombinations(availableMatches, thresholds.med_threshold),
+      high: findMinimalCombinations(availableMatches, thresholds.high_threshold)
+    };
+
+    return success(res, {
+      accountId: account.id,
+      lowThreshold: thresholds.low_threshold,
+      medThreshold: thresholds.med_threshold,
+      highThreshold: thresholds.high_threshold,
+      signerWeights,
+      validCombinations
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ * Helper function to find minimal signer combinations that meet a threshold.
+ * Returns all combinations with the minimum number of signers.
+ *
+ * @param {Array} signers - Array of signers with { key, weight, type }
+ * @param {number} threshold - Threshold to meet
+ * @returns {Array} Array of minimal signer combinations
+ */
+function findMinimalCombinations(signers, threshold) {
+  if (threshold <= 0) {
+    return [[]];
+  }
+
+  // Generate all possible combinations
+  const allCombinations = [];
+  const n = signers.length;
+
+  // Use bitmask to generate all subsets
+  for (let mask = 0; mask < (1 << n); mask++) {
+    const combination = [];
+    let totalWeight = 0;
+
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) {
+        combination.push(signers[i]);
+        totalWeight += signers[i].weight;
+      }
+    }
+
+    if (totalWeight >= threshold && combination.length > 0) {
+      allCombinations.push(combination);
+    }
+  }
+
+  if (allCombinations.length === 0) {
+    return [];
+  }
+
+  // Find minimum size
+  const minSize = Math.min(...allCombinations.map(c => c.length));
+
+  // Filter to only minimal combinations
+  const minimal = allCombinations
+    .filter(c => c.length === minSize)
+    .map(c => c.map(s => ({ key: s.key, weight: s.weight, type: s.type })));
+
+  // Remove duplicates (sort by keys for comparison)
+  const unique = [];
+  const seen = new Set();
+
+  for (const combo of minimal) {
+    const sorted = combo.slice().sort((a, b) => a.key.localeCompare(b.key));
+    const key = sorted.map(s => s.key).join('|');
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(combo);
+    }
+  }
+
+  return unique;
+}
 
 /**
  * Helper to evaluate Stellar claimable balance predicates.

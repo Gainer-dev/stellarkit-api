@@ -393,6 +393,122 @@ GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN
 
 ---
 
+### `GET /account/:id/pool-positions`
+Returns all liquidity pool positions for an account with calculated share values and equivalent reserves.
+
+**Example:**
+```
+GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/pool-positions
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "poolId": "67339253ccd0390f4886b5952d7f8d68f70f61280d908e234190c609c95b6026",
+      "shares": "1000.0000000",
+      "sharePercent": "5.2500",
+      "totalPoolShares": "19047.6190476",
+      "reserveA": {
+        "asset": "native",
+        "totalAmount": "50000.0000000",
+        "equivalentAmount": "2625.0000000"
+      },
+      "reserveB": {
+        "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "totalAmount": "50000.0000000",
+        "equivalentAmount": "2625.0000000"
+      },
+      "feeBp": 30,
+      "totalTrustlines": 42,
+      "lastModifiedLedger": 12345678
+    }
+  ],
+  "meta": {
+    "count": 1,
+    "accountId": "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+  }
+}
+```
+
+**Key Fields:**
+- `shares`: The account's pool share tokens
+- `sharePercent`: Percentage of total pool ownership
+- `equivalentAmount`: The account's proportional share of each reserve asset
+- `feeBp`: Pool fee in basis points (30 = 0.3%)
+
+---
+
+### `GET /account/:id/transactions/search`
+Searches transaction history for a Stellar account and filters results by memo content. Useful for developers building payment reference tracking systems.
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `memo` | string | Yes | Memo value to search for |
+| `memo_type` | string | No | Filter by memo type: `text`, `id`, `hash`, `return` |
+| `limit` | number | No | Number of results (default: 10, max: 200) |
+| `cursor` | string | No | Pagination cursor from previous response |
+| `order` | string | No | Sort order: `asc` or `desc` (default: `desc`) |
+
+**Example:**
+```
+GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/transactions/search?memo=invoice-123
+GET /account/GAAZI4.../transactions/search?memo=12345&memo_type=id
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "123456789",
+      "hash": "abc123...",
+      "ledger": 12345678,
+      "createdAt": "2024-07-01T12:00:00Z",
+      "sourceAccount": "GAAZI4...",
+      "fee": {
+        "charged": "100",
+        "account": "GAAZI4..."
+      },
+      "feeSummary": {
+        "chargedInStroops": 100,
+        "chargedInXLM": "0.0000100",
+        "perOperationInStroops": 100,
+        "perOperationInXLM": "0.0000100"
+      },
+      "operationCount": 1,
+      "memoType": "text",
+      "memo": "invoice-123",
+      "successful": true,
+      "envelopeXdr": "..."
+    }
+  ],
+  "meta": {
+    "count": 1,
+    "limit": 10,
+    "order": "desc",
+    "searchQuery": {
+      "memo": "invoice-123",
+      "memoType": "any"
+    },
+    "nextCursor": "123456789",
+    "hasMore": false
+  }
+}
+```
+
+**Search Behavior:**
+- **Text memos**: Case-insensitive substring match (e.g., "inv" matches "invoice-123")
+- **ID/Hash/Return memos**: Exact match only
+- Transactions with `memo_type: none` are excluded from results
+- Only successful transactions are returned
+
+---
+
 ### `GET /transactions/:id`
 
 Returns paginated transaction history for an account.
@@ -421,6 +537,62 @@ Returns metadata and statistics for a specific Stellar asset.
 ```
 GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
 ```
+
+---
+
+### `GET /dex/spread/:sellAsset/:buyAsset`
+Calculates the bid-ask spread for a trading pair on the Stellar DEX. Helps developers and traders assess market liquidity at a glance.
+
+**Asset Format**: `CODE:ISSUER` (e.g., `XLM:native`, `USDC:GA5Z...`)
+
+**Example:**
+```
+GET /dex/spread/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+GET /dex/spread/USDC:GA5Z.../EURC:GB...
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "bestBid": {
+      "price": "0.0850000",
+      "amount": "1000.0000000"
+    },
+    "bestAsk": {
+      "price": "0.0855000",
+      "amount": "500.0000000"
+    },
+    "spreadAbsolute": "0.0005000",
+    "spreadPercent": "0.5882",
+    "midPrice": "0.0852500",
+    "liquidity": "high",
+    "orderBookDepth": {
+      "bids": 25,
+      "asks": 30,
+      "totalBidVolume": "50000.0000000",
+      "totalAskVolume": "45000.0000000",
+      "totalVolume": "95000.0000000"
+    }
+  }
+}
+```
+
+**Key Fields:**
+- `bestBid`: Highest buy order price and amount
+- `bestAsk`: Lowest sell order price and amount
+- `spreadAbsolute`: Difference between ask and bid prices
+- `spreadPercent`: Spread as percentage of mid price
+- `midPrice`: Average of best bid and ask
+- `liquidity`: Market depth assessment (high/medium/low)
+  - **high**: Total volume ≥ 10,000
+  - **medium**: Total volume ≥ 1,000
+  - **low**: Total volume < 1,000
+
+**Error Responses:**
+- `400`: Invalid asset format
+- `404`: No order book exists for trading pair
 
 ---
 

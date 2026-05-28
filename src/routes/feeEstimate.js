@@ -106,4 +106,108 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+/**
+ * GET /fee-estimate/surge-status
+ * Identifies whether the network is currently in a fee surge period
+ * by analyzing recent ledger capacity usage.
+ *
+ * Returns actionable advice on when to submit transactions.
+ *
+ * @example
+ * GET /fee-estimate/surge-status
+ */
+router.get("/surge-status", async (req, res, next) => {
+  try {
+    const cacheKey = "fee-surge-status";
+    const fresh = req.query.fresh === "true";
+
+    // Check cache first (unless fresh=true)
+    if (!fresh) {
+      const cached = feeEstimateCache.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
+    // Fetch the last 10 ledgers
+    const ledgers = await server.ledgers().order("desc").limit(10).call();
+    const records = ledgers.records || [];
+
+    if (records.length === 0) {
+      const err = new Error("Unable to fetch recent ledger data.");
+      err.status = 503;
+      throw err;
+    }
+
+    // Extract capacity usage from each ledger
+    const capacityUsages = records.map((ledger) => {
+      // Stellar doesn't directly return capacity usage per ledger
+      // We calculate it as: successful_transactions / max_tx_set_size
+      // Default max_tx_set_size is 1000
+      const maxTxSetSize = 1000;
+      const txCount = ledger.successful_transaction_count || 0;
+      return Math.min(txCount / maxTxSetSize, 1.0);
+    });
+
+    // Calculate average capacity usage
+    const avgCapacityUsage =
+      capacityUsages.reduce((a, b) => a + b, 0) / capacityUsages.length;
+
+    // Fetch current fee stats for suggested fee
+    const feeStats = await server.feeStats();
+    const surgeThreshold = 0.5;
+    const isSurging = avgCapacityUsage > surgeThreshold;
+
+    // Select suggested fee based on surge status
+    let suggestedFee;
+    let recommendation;
+
+    if (isSurging) {
+      // High congestion: recommend priority fee
+      suggestedFee = parseInt(feeStats.fee_charged.p95);
+      recommendation =
+        "Network is experiencing a fee surge. Consider using the priority fee tier to ensure timely transaction inclusion. If your transaction is not time-sensitive, consider waiting for congestion to subside.";
+    } else if (avgCapacityUsage > 0.25) {
+      // Moderate congestion: recommend standard fee
+      suggestedFee = parseInt(feeStats.fee_charged.p50);
+      recommendation =
+        "Network has moderate congestion. The standard fee tier should provide reliable transaction inclusion within a few seconds.";
+    } else {
+      // Low congestion: economy fee is fine
+      suggestedFee = parseInt(feeStats.fee_charged.min);
+      recommendation =
+        "Network is operating normally with low congestion. The economy fee tier is sufficient for transaction inclusion.";
+    }
+
+    const data = {
+      isSurging,
+      avgCapacityUsage: parseFloat(avgCapacityUsage.toFixed(4)),
+      surgeThreshold,
+      ledgersAnalyzed: records.length,
+      capacityUsageDetails: capacityUsages.map((usage) =>
+        parseFloat(usage.toFixed(4))
+      ),
+      suggestedFee,
+      suggestedFeeInXLM: (suggestedFee / 1e7).toFixed(7),
+      recommendation,
+      currentNetworkStats: {
+        lastLedgerBaseFee: feeStats.last_ledger_base_fee,
+        ledgerCapacityUsage: feeStats.ledger_capacity_usage,
+        minFee: feeStats.fee_charged.min,
+        p50Fee: feeStats.fee_charged.p50,
+        p95Fee: feeStats.fee_charged.p95,
+      },
+    };
+
+    // Cache the response (surge status can be cached briefly since it's analyzed data)
+    feeEstimateCache.set(cacheKey, data);
+
+    res.set("X-Cache", "MISS");
+    return success(res, data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

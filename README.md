@@ -413,6 +413,76 @@ Use the `GET /fee-estimate` endpoint before submitting transactions. It returns 
 
 ---
 
+## Understanding XDR
+
+XDR (External Data Representation) is the binary serialization format Stellar uses to encode transactions, operations, and results on the ledger. Every transaction that is built, signed, and submitted to the network is serialized into XDR before it travels anywhere. Horizon stores and returns this serialized form alongside the human-readable fields in its responses.
+
+In practice, XDR looks like a long Base64-encoded string — for example:
+
+```
+AAAAAgAAAAA1YmS1mXvUjD7Zq0L0m3i4XN6T8z7j8X7X8X7X8X7XAAAAZAAA...
+```
+
+It is compact and deterministic, which makes it ideal for signing and network transmission, but it is not human-readable on its own. That is why a decoder is useful during development.
+
+### Where XDR Appears in API Responses
+
+You will encounter XDR fields in several places across the StellarKit API:
+
+| Field | Endpoint | Description |
+|---|---|---|
+| `envelopeXdr` | `GET /transactions/:id`, `GET /account/:id/transactions/search` | The full signed transaction envelope. Contains the transaction body, all operations, and all signatures. This is the exact bytes that were submitted to the network. |
+| `envelope_xdr` | `GET /stream/transactions/:id` (SSE stream) | Same envelope data, returned in the raw Horizon field name format used by the streaming formatter. |
+| `result_xdr` | `GET /stream/transactions/:id` (SSE stream) | The transaction result as recorded by the ledger. Encodes whether the transaction succeeded and the result code for each operation. |
+| `result_meta_xdr` | `GET /stream/transactions/:id` (SSE stream) | Ledger entry changes produced by the transaction — which accounts, trustlines, offers, or data entries were created, updated, or deleted. |
+
+### When You Need to Decode XDR
+
+Most of the time you can ignore XDR fields entirely — the API already surfaces the important data (fee, memo, operation count, success status) as plain JSON. XDR becomes relevant when you need to:
+
+- **Inspect raw operations** — verify exactly what operations a transaction contained, including source accounts and parameters not surfaced in the summary fields.
+- **Debug failed transactions** — `result_xdr` encodes the precise failure reason for each operation, which is more detailed than the top-level `successful` flag.
+- **Audit ledger state changes** — `result_meta_xdr` shows every ledger entry that was modified, useful for reconciliation and auditing.
+- **Re-sign or resubmit** — if you need to take an existing envelope, inspect it, and resubmit or modify it, you start from the `envelopeXdr` value.
+
+### Decoding XDR
+
+Use the `POST /utils/decode-xdr` endpoint to convert any Base64-encoded transaction envelope into a readable JSON object. Pass the XDR string in the request body:
+
+```
+POST /utils/decode-xdr
+Content-Type: application/json
+
+{ "xdr": "AAAAAgAAAAD..." }
+```
+
+The response breaks the envelope down into its component parts:
+
+```json
+{
+  "success": true,
+  "data": {
+    "sourceAccount": "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+    "fee": "100",
+    "sequenceNumber": "12345678",
+    "memo": { "type": "text", "value": "invoice-123" },
+    "timeBounds": null,
+    "operations": [
+      {
+        "type": "payment",
+        "destination": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "asset": { "code": "USDC", "issuer": "GA5Z..." },
+        "amount": "50.0000000"
+      }
+    ]
+  }
+}
+```
+
+The decoder accepts `envelopeXdr` values from any StellarKit response and works for both testnet and mainnet transactions.
+
+---
+
 ## TypeScript Support
 
 This repository publishes type declarations in `types/index.d.ts`. Use these types to make your client integration type-safe.

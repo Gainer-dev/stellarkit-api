@@ -25,7 +25,7 @@ router.get("/", async (req, res, next) => {
 
     // Check cache first (unless fresh=true)
     if (!fresh) {
-      const cached = feeEstimateCache.get(cacheKey);
+      const cached = cache.get(cacheKey);
       if (cached) {
         res.set("X-Cache", "HIT");
         return success(res, cached);
@@ -99,7 +99,7 @@ router.get("/", async (req, res, next) => {
     };
 
     // Cache the response
-    feeEstimateCache.set(cacheKey, data);
+    cache.set(cacheKey, data, CACHE_TTL);
 
     res.set("X-Cache", "MISS");
     return success(res, data);
@@ -125,7 +125,7 @@ router.get("/surge-status", async (req, res, next) => {
 
     // Check cache first (unless fresh=true)
     if (!fresh) {
-      const cached = feeEstimateCache.get(cacheKey);
+      const cached = cache.get(cacheKey);
       if (cached) {
         res.set("X-Cache", "HIT");
         return success(res, cached);
@@ -203,7 +203,7 @@ router.get("/surge-status", async (req, res, next) => {
     };
 
     // Cache the response (surge status can be cached briefly since it's analyzed data)
-    feeEstimateCache.set(cacheKey, data);
+    cache.set(cacheKey, data, CACHE_TTL);
 
     res.set("X-Cache", "MISS");
     return success(res, data);

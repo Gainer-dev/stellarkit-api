@@ -4,11 +4,11 @@ const { Asset } = require("@stellar/stellar-sdk");
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
 const { assetHoldersRateLimiter } = require("../middleware/rateLimiter");
-const {
-  validateAccountId,
-  validateAssetCode,
-} = require("../utils/validators");
+const normalizeAssetCode = require("../middleware/normalizeAssetCode");
+const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { parsePaginationParams } = require("../utils/pagination");
+router.use(normalizeAssetCode);
+
 
 function findAssetBalance(account, assetCode, issuer) {
   return (account.balances || []).find(

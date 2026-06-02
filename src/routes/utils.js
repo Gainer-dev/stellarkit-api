@@ -4,9 +4,11 @@ const router = express.Router();
 const { success } = require("../utils/response");
 const { validateAccountId } = require("../utils/validators");
 const { Transaction, Networks, Keypair } = require("@stellar/stellar-sdk");
+const { server } = require("../config/stellar");
 
 const FRIENDBOT_URL = "https://friendbot.stellar.org";
 const STROOPS_PER_XLM = 10000000n;
+const AVERAGE_LEDGER_CLOSE_SECONDS = 5;
 const { decodeMemo } = require("../utils/memo");
 
 function createValidationError(message) {
@@ -234,6 +236,54 @@ router.get("/convert", (req, res, next) => {
     return success(res, {
       xlm: formatStroopsToXlm(convertedStroops),
       stroops: convertedStroops,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+function parseLedgerSequence(value) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw createValidationError("Query parameter 'sequence' is required and must be a positive integer.");
+  }
+
+  if (!/^\d+$/.test(value)) {
+    throw createValidationError("Query parameter 'sequence' must be a positive integer.");
+  }
+
+  const sequence = Number(value);
+  if (sequence <= 0 || !Number.isSafeInteger(sequence)) {
+    throw createValidationError("Query parameter 'sequence' must be a positive integer.");
+  }
+
+  return sequence;
+}
+
+/**
+ * GET /utils/ledger-date?sequence={sequence}
+ * Estimate the approximate date and time a Stellar ledger sequence was closed.
+ */
+router.get("/ledger-date", async (req, res, next) => {
+  try {
+    const sequence = parseLedgerSequence(req.query.sequence);
+    const latestResponse = await server.ledgers().order("desc").limit(1).call();
+    const latestLedger = latestResponse.records && latestResponse.records[0];
+
+    if (!latestLedger || !latestLedger.closed_at || !latestLedger.sequence) {
+      throw new Error("Unable to determine the latest ledger from Horizon.");
+    }
+
+    const latestSequence = Number(latestLedger.sequence);
+    const latestClosedAt = new Date(latestLedger.closed_at);
+    const sequenceDelta = latestSequence - sequence;
+    const estimatedDate = new Date(
+      latestClosedAt.getTime() - sequenceDelta * AVERAGE_LEDGER_CLOSE_SECONDS * 1000,
+    );
+
+    return success(res, {
+      sequence,
+      estimatedDate: estimatedDate.toISOString(),
+      note: "This date is an approximation based on an average Stellar ledger close time of ~5 seconds.",
     });
   } catch (err) {
     next(err);

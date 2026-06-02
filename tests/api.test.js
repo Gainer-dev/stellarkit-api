@@ -842,6 +842,56 @@ describe("StellarKit API", () => {
     });
   });
 
+  describe("GET /utils/ledger-date", () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it("returns estimated ledger close date for a valid sequence", async () => {
+      const stellarConfig = require("../src/config/stellar");
+      jest.spyOn(stellarConfig.server, "ledgers").mockReturnValue({
+        order: () => ({
+          limit: () => ({
+            call: async () => ({
+              records: [
+                {
+                  sequence: "12350",
+                  closed_at: "2026-06-02T12:00:00Z",
+                },
+              ],
+            }),
+          }),
+        }),
+      });
+
+      const res = await request(app).get("/utils/ledger-date?sequence=12345");
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveProperty("sequence", 12345);
+      expect(res.body.data).toHaveProperty("estimatedDate");
+      expect(res.body.data.estimatedDate).toBe("2026-06-02T11:59:35.000Z");
+      expect(res.body.data).toHaveProperty("note");
+      expect(res.body.data.note).toContain("approximation");
+    });
+
+    it("returns 400 for non-positive sequence values", async () => {
+      const res = await request(app).get("/utils/ledger-date?sequence=0");
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.type).toBe("ValidationError");
+    });
+
+    it("returns 400 for invalid sequence format", async () => {
+      const res = await request(app).get("/utils/ledger-date?sequence=abc");
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.type).toBe("ValidationError");
+    });
+  });
+
   // ── DEX Price ──────────────────────────────────────────────────────────────
   describe("GET /dex/price/:sellAsset/:buyAsset", () => {
     const USDC_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";

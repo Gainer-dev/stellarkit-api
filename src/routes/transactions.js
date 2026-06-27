@@ -1,9 +1,20 @@
 const express = require("express");
 const router = express.Router();
-const { server } = require("../config/stellar");
+const { server, NETWORK } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
 const { validateAccountId } = require("../utils/validators");
 const { parsePaginationParams } = require("../utils/pagination");
+const { makeAccountNotFoundError } = require("../utils/errors");
+
+function handleAccountNotFound(err, next, accountId) {
+  if (err && err.response && err.response.status === 404) {
+    return next(makeAccountNotFoundError(accountId, NETWORK));
+  }
+  if (err && err.isAccountNotFound) {
+    return next(err);
+  }
+  next(err);
+}
 
 /**
  * GET /transactions/:id
@@ -127,7 +138,7 @@ router.get("/:id", async (req, res, next) => {
       },
     });
   } catch (err) {
-    next(err);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -245,7 +256,7 @@ router.get("/:id/operations", async (req, res, next) => {
       },
     });
   } catch (err) {
-    next(err);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 

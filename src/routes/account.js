@@ -1,8 +1,9 @@
 const express = require("express");
 const router = express.Router();
 
-const { server, fetchAccountCreation } = require("../config/stellar");
+const { server, fetchAccountCreation, NETWORK } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
+const { makeAccountNotFoundError } = require("../utils/errors");
 
 const {
   validateAccountId,
@@ -31,11 +32,12 @@ function validateLimit(limit, max = 200) {
   return n;
 }
 
-function handleAccountNotFound(err, next) {
+function handleAccountNotFound(err, next, accountId) {
   if (err && err.response && err.response.status === 404) {
-    const notFoundErr = new Error("Account not found.");
-    notFoundErr.status = 404;
-    return next(notFoundErr);
+    return next(makeAccountNotFoundError(accountId, NETWORK));
+  }
+  if (err && err.isAccountNotFound) {
+    return next(err);
   }
   next(err);
 }
@@ -143,7 +145,7 @@ router.get("/:id/trustlines", async (req, res, next) => {
       count: trustlines.length,
     });
   } catch (err) {
-    next(err);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -160,7 +162,7 @@ router.get("/:id/balances", async (req, res, next) => {
 
     return success(res, formatted);
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -180,7 +182,7 @@ router.get("/:id/sequence", async (req, res, next) => {
       lastModifiedLedger: account.last_modified_ledger,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -237,7 +239,7 @@ router.get("/:id/payments", async (req, res, next) => {
       },
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -293,7 +295,7 @@ router.get("/:id/offers", async (req, res, next) => {
       meta: { count: offers.length, limit, nextCursor, hasMore },
     });
   } catch (err) {
-    next(err);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -314,7 +316,10 @@ router.get("/:id/analytics", async (req, res, next) => {
         .order("asc")
         .call();
       transactions = response.records || [];
-    } catch (_) {
+    } catch (fetchErr) {
+      if (fetchErr && fetchErr.response && fetchErr.response.status === 404) {
+        throw fetchErr;
+      }
       transactions = [];
     }
 
@@ -352,7 +357,7 @@ router.get("/:id/analytics", async (req, res, next) => {
       lastSeen,
     });
   } catch (err) {
-    next(err);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -383,7 +388,7 @@ router.get("/:id", async (req, res, next) => {
         subentryReserve: { xlm: toXLM(subentryReserve), stroops: toStroops(subentryReserve) },
         totalLocked: { xlm: toXLM(totalLocked), stroops: toStroops(totalLocked) },
         spendable: {
-          xlm: toXLM(parseFloat((account.balances || []).find((b) => b.asset_type === "native")?.balance || "0") - totalLocked)),
+          xlm: toXLM(parseFloat((account.balances || []).find((b) => b.asset_type === "native")?.balance || "0") - totalLocked),
           stroops: toStroops(
             parseFloat((account.balances || []).find((b) => b.asset_type === "native")?.balance || "0") - totalLocked,
           ),
@@ -391,7 +396,7 @@ router.get("/:id", async (req, res, next) => {
       },
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -437,7 +442,7 @@ router.get("/:id/subentry-health", async (req, res, next) => {
       },
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -500,7 +505,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
       accountsSponsoring,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -587,7 +592,7 @@ router.get("/:id/freeze-status/:assetCode/:assetIssuer", async (req, res, next) 
       detail,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -608,7 +613,7 @@ router.get("/:id/age", async (req, res, next) => {
       }),
     );
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -651,7 +656,7 @@ router.get("/:id/inactivity", async (req, res, next) => {
       status,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -735,7 +740,7 @@ router.get("/:id/can-receive/:assetCode/:assetIssuer", async (req, res, next) =>
       limit,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -824,7 +829,7 @@ router.get("/:id/volume", async (req, res, next) => {
       volumeByAsset,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -875,7 +880,7 @@ router.get("/:id/offer-history", async (req, res, next) => {
       meta: { count: offerOps.length, limit, order, nextCursor, hasMore: records.length === limit },
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -955,7 +960,7 @@ router.get("/:id/pool-positions", async (req, res, next) => {
       meta: { count: positions.length, accountId: id },
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 
@@ -1046,7 +1051,7 @@ router.post("/:id/multisig-plan", async (req, res, next) => {
       validCombinations,
     });
   } catch (err) {
-    handleAccountNotFound(err, next);
+    handleAccountNotFound(err, next, req.params.id);
   }
 });
 

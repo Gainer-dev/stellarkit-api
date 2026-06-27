@@ -68,6 +68,20 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+  // AccountNotFound errors (Horizon 404 on account lookup)
+  if (err.isAccountNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
+      error: {
+        type: "AccountNotFound",
+        message: err.message,
+        suggestion:
+          "Verify the account address is correct and that the account has been funded.",
+      },
+    });
+  }
+
   // Validation errors (thrown manually)
   if (err.isValidation) {
     logError(400, req, err.message);

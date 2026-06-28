@@ -62,7 +62,7 @@ describe("Asset Routes", () => {
       const res = await request(app).get("/asset/TOOLONGCODE/INVALID_ISSUER/supply");
       expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.error.type).toBe("ValidationError");
+      expect(res.body.error.type).toBe("InvalidAsset");
     });
   });
 });

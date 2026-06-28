@@ -1,10 +1,11 @@
 /**
  * Centralised error handler middleware.
  * Formats Horizon / Stellar SDK errors into consistent JSON responses.
+ * All non-Horizon errors are wrapped in StellarKitError for consistency.
  */
 const { translateHorizonError } = require("../utils/horizonErrors");
-
 const { mapHorizonErrorToStatus } = require("../utils/horizonStatusMapper");
+const StellarKitError = require("../utils/StellarKitError");
 
 /**
  * Logs 4xx and 5xx responses to the console.
@@ -17,25 +18,34 @@ const { mapHorizonErrorToStatus } = require("../utils/horizonStatusMapper");
 function logError(status, req, message) {
   if (process.env.NODE_ENV === "test") return;
   if (status >= 400) {
+    const requestId = req.requestId || "-";
     const label = status >= 500 ? "ERROR" : "WARN";
     console.error(
-      `[${label}] ${req.method} ${req.path} → ${status} | ${message}`
+      `[${label}] [${requestId}] ${req.method} ${req.path} → ${status} | ${message}`
     );
   }
 }
 
 function errorHandler(err, req, res, next) {
-  // Stellar / Horizon specific errors
-  if (err.response && err.response.data) {
+  // Horizon errors returned from horizon-client / Stellar SDK
+  if (err && err.response && err.response.data) {
     const horizonError = err.response.data;
+    const extras = horizonError.extras !== undefined ? horizonError.extras : null;
 
-    const resultCode =
-      horizonError?.extras?.result_codes?.transaction ??
-      horizonError?.extras?.result_codes?.operations?.[0] ??
-      null;
+    let resultCode = null;
+    if (extras && extras.result_codes) {
+      if (typeof extras.result_codes.transaction === "string") {
+        resultCode = extras.result_codes.transaction;
+      } else if (
+        Array.isArray(extras.result_codes.operations) &&
+        extras.result_codes.operations.length > 0
+      ) {
+        resultCode = extras.result_codes.operations[0];
+      }
+    }
 
     const mappedStatus = mapHorizonErrorToStatus(resultCode);
-    const status = mappedStatus ?? err.response.status ?? 400;
+    const httpStatus = mappedStatus ?? err.response.status ?? 400;
 
     const code = resultCode || null;
     const humanMessage = translateHorizonError(resultCode);
@@ -48,36 +58,90 @@ function errorHandler(err, req, res, next) {
         type: "HorizonError",
         title: horizonError.title || "Horizon Error",
         detail: horizonError.detail || "An error occurred with the Stellar network.",
-        status: horizonError.status || err.response.status,
-        extras: horizonError.extras || null,
-        ...(code && { code }),
-        ...(humanMessage && { message: humanMessage }),
+        status: err.response.status,
+        extras,
       },
+    };
+
+    if (resultCode) {
+      body.error.code = resultCode;
+      const humanMessage = translateHorizonError(resultCode);
+      if (humanMessage && typeof humanMessage === "string" && humanMessage.length > 0) {
+        body.error.message = humanMessage;
+      }
+    }
+
+    logError(httpStatus, req, horizonError.detail || horizonError.title || "Horizon Error");
+    return res.status(httpStatus).json(body);
+  }
+
+  // StellarKitError instances — already structured
+  if (err instanceof StellarKitError) {
+    logError(err.statusCode, req, err.message);
+    return res.status(err.statusCode).json({
+      success: false,
+      error: err.toJSON(),
     });
   }
 
   // Payload too large errors from body parsers
   if (err.type === "entity.too.large" || err.status === 413) {
     const maxBodySize = process.env.MAX_BODY_SIZE || "10kb";
-    const message = `Payload too large. Maximum request body size is ${maxBodySize}.`;
-    logError(413, req, message);
+    const ske = new StellarKitError(
+      `Payload too large. Maximum request body size is ${maxBodySize}.`,
+      413,
+      "PayloadTooLargeError",
+      null,
+      `Reduce your request body size to under ${maxBodySize}.`
+    );
+    logError(413, req, ske.message);
     return res.status(413).json({
       success: false,
+      error: ske.toJSON(),
+    });
+  }
+
+  // AccountNotFound errors (Horizon 404 on account lookup)
+  if (err.isAccountNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
       error: {
-        type: "PayloadTooLargeError",
-        message,
+        type: "AccountNotFound",
+        message: err.message,
+        suggestion:
+          "Verify the account address is correct and that the account has been funded.",
+      },
+    });
+  }
+
+  // InvalidAsset errors — thrown by validateAsset(code, issuer)
+  if (err.isInvalidAsset) {
+    logError(400, req, err.message);
+    return res.status(400).json({
+      success: false,
+      error: {
+        type: "InvalidAsset",
+        message: err.message,
+        suggestion: err.suggestion || null,
       },
     });
   }
 
   // Validation errors (thrown manually)
   if (err.isValidation) {
+    const ske = new StellarKitError(
+      err.message,
+      400,
+      "ValidationError",
+      null,
+      err.expectedFormat ? `Expected format: ${err.expectedFormat}` : null
+    );
     logError(400, req, err.message);
     return res.status(400).json({
       success: false,
       error: {
-        type: "ValidationError",
-        message: err.message,
+        ...ske.toJSON(),
         field: err.field,
         receivedValue: err.receivedValue,
         expectedFormat: err.expectedFormat,
@@ -91,13 +155,11 @@ function errorHandler(err, req, res, next) {
     process.env.NODE_ENV === "production"
       ? "An unexpected error occurred."
       : err.message;
+  const skeGeneric = new StellarKitError(message, status, "ServerError");
   logError(status, req, err.message);
   return res.status(status).json({
     success: false,
-    error: {
-      type: "ServerError",
-      message,
-    },
+    error: skeGeneric.toJSON(),
   });
 }
 

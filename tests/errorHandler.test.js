@@ -276,6 +276,7 @@ describe("ErrorHandler Middleware", () => {
           field: "accountId",
           receivedValue: "G12345",
           expectedFormat: "G... public key",
+          suggestion: "Expected format: G... public key",
         },
       });
     });

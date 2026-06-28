@@ -39,50 +39,130 @@ This project is ideal for:
 
 ---
 
-## API Quick Reference
+## Documentation
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| GET | `/` | Lists available API endpoints and descriptions |
-| GET | `/health` | Returns basic service health status |
-| GET | `/network-status` | Returns current Stellar network and ledger info |
-| GET | `/fee-estimate` | Calculates fee estimates for a transaction |
-| GET | `/account/:id` | Retrieves full account details and balances |
-| GET | `/account/:id/balances` | Retrieves XLM and asset balances only |
-| GET | `/account/:id/sequence` | Retrieves the account sequence number |
-| GET | `/account/:id/summary` | Retrieves a compact account summary |
-| GET | `/account/:id/payments` | Lists payment and create_account operations |
-| GET | `/account/:id/sponsorship` | Returns sponsorship relationships for the account (sponsor id and sponsored ledger entries) |
-| GET | `/transactions/:id` | Retrieves paginated transaction history |
-| GET | `/transactions/:id/operations` | Retrieves paginated operation history |
-| GET | `/asset/:code/:issuer` | Retrieves metadata and statistics for an asset |
-| GET | `/asset/:code/:issuer/holders` | Lists holders of an asset trustline |
-| GET | `/asset/search` | Searches assets by code across issuers |
-| GET | `/stream/transactions/:id` | Streams live account transactions via SSE |
-| GET | `/utils/friendbot/:accountId` | Funds a testnet account via Friendbot |
-| GET | `/utils/memo` | Decodes Horizon memo data |
-| GET | `/utils/base64` | Encodes or decodes Base64 strings |
-| Method | Endpoint                       | Description                                     |
-| ------ | ------------------------------ | ----------------------------------------------- |
-| GET    | `/`                            | Lists available API endpoints and descriptions  |
-| GET    | `/health`                      | Returns basic service health status             |
-| GET    | `/network-status`              | Returns current Stellar network and ledger info |
-| GET    | `/fee-estimate`                | Calculates fee estimates for a transaction      |
-| GET    | `/account/:id`                 | Retrieves full account details and balances     |
-| GET    | `/account/:id/balances`        | Retrieves XLM and asset balances only           |
-| GET    | `/account/:id/sequence`        | Retrieves the account sequence number           |
-| GET    | `/account/:id/summary`         | Retrieves a compact account summary             |
-| GET    | `/account/:id/payments`        | Lists payment and create_account operations     |
-| GET    | `/transactions/:id`            | Retrieves paginated transaction history         |
-| GET    | `/transactions/:id/operations` | Retrieves paginated operation history           |
-| GET    | `/asset/:code/:issuer`         | Retrieves metadata and statistics for an asset  |
-| GET    | `/asset/:code/:issuer/holders` | Lists holders of an asset trustline             |
-| GET    | `/asset/search`                | Searches assets by code across issuers          |
-| GET    | `/stream/transactions/:id`     | Streams live account transactions via SSE       |
-| GET    | `/utils/friendbot/:accountId`  | Funds a testnet account via Friendbot           |
-| GET    | `/utils/memo`                  | Decodes Horizon memo data                       |
-| GET    | `/utils/base64`                | Encodes or decodes Base64 strings               |
-| GET    | `/utils/convert`               | Converts between XLM and stroops                |
+- [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
+
+---
+
+## API Reference
+
+### Network
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/` | Lists available API endpoints | — |
+| GET | `/health` | Service health check | — |
+| GET | `/network-status` | Latest ledger, fees, and protocol info | `fresh` |
+| GET | `/network/ledger-timing` | Analyze ledger close time consistency | — |
+| GET | `/network/validators` | Current validator list grouped by organisation | `fresh` |
+
+### Fees
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/fee-estimate` | Fee tiers for transaction submission | `operations`, `fresh` |
+| GET | `/fee-estimate/surge-status` | Fee surge detection and recommendations | `fresh` |
+
+### Account
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/account/:id` | Account details, balances, reserve breakdown | — |
+| GET | `/account/:id/age` | Account age and longevity metrics | — |
+| GET | `/account/:id/balances` | XLM and asset balances | — |
+| GET | `/account/:id/sequence` | Current sequence number | — |
+| GET | `/account/:id/trustlines` | Trustlines with TOML asset metadata resolved | — |
+| GET | `/account/:id/payments` | Payment and create_account operations | `limit`, `order`, `cursor` |
+| GET | `/account/:id/offers` | Open DEX offers for an account | `limit`, `cursor` |
+| GET | `/account/:id/offer-history` | Historical offer operations | `limit`, `order`, `cursor` |
+| GET | `/account/:id/analytics` | Basic account activity analytics | — |
+| GET | `/account/:id/inactivity` | Days since last transaction and status | — |
+| GET | `/account/:id/volume` | Transaction volume by asset over a time period | `days` |
+| GET | `/account/:id/freeze-status/:assetCode/:assetIssuer` | Check if an asset is frozen on an account | — |
+| GET | `/account/:id/can-receive/:assetCode/:assetIssuer` | Check if an account can receive a specific asset | — |
+| GET | `/account/:id/subentry-health` | Subentry usage and remaining capacity | — |
+| GET | `/account/:id/sponsorship` | Sponsorship relationships for the account | — |
+| GET | `/account/:id/pool-positions` | Liquidity pool positions and share values | — |
+| GET | `/account/:id/counterparties` | Frequent payment counterparties | — |
+| GET | `/account/:id/transactions/search` | Search transactions by memo content | `memo`, `memo_type`, `limit`, `cursor`, `order` |
+| POST | `/account/:id/multisig-plan` | Signer combinations for each threshold | Body: `availableSigners` |
+
+### Transactions
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/transactions/:id` | Paginated transaction history for an account | `limit`, `order`, `cursor` |
+| GET | `/transactions/:id/operations` | Paginated operation history for an account | `limit`, `order`, `cursor` |
+| POST | `/transactions/batch-status` | Check confirmation status of multiple tx hashes | Body: `hashes` |
+
+### Asset
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/asset/:code/:issuer` | Asset metadata and statistics | `fresh` |
+| GET | `/asset/:code/:issuer/holders` | Paginated accounts holding an asset | `limit`, `order`, `cursor` |
+| GET | `/asset/:code/:issuer/distribution` | Holder concentration and Gini coefficient | — |
+| GET | `/asset/:code/:issuer/supply` | Total, circulating, and locked supply breakdown | — |
+| GET | `/asset/:code/:issuer/verify` | Verify issuer via flags, home_domain, and stellar.toml | — |
+| GET | `/asset/search` | Search assets by code across all issuers | `code`, `limit` |
+
+### DEX
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/dex/price/:sellAsset/:buyAsset` | Effective exchange rate via best DEX path | `amount` |
+| GET | `/dex/spread/:sellAsset/:buyAsset` | Bid-ask spread for a trading pair | — |
+| GET | `/dex/depth/:sellAsset/:buyAsset` | Full order book depth analysis | — |
+| GET | `/dex/imbalance/:sellAsset/:buyAsset` | Buy/sell pressure imbalance detection | — |
+| GET | `/dex/arbitrage/:assetCode/:assetIssuer` | Circular arbitrage path discovery | — |
+
+### Liquidity Pools
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/liquidity-pools/:id/profitability` | Estimated annualized fee income | — |
+| GET | `/liquidity-pools/:id/reserve-ratio` | Reserve ratio and drift from equal | — |
+
+### Claimable Balances
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/claimable-balances/:id/evaluate/:accountId` | Evaluate claimability for a specific account | — |
+
+### Streaming
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| WS | `/stream/ledgers` | Real-time ledger updates via WebSocket | — |
+| GET | `/stream/transactions/:id` | Live account transactions via SSE | — |
+| GET | `/stream/payments/:id` | Live payment events via SSE | — |
+
+### Stellar TOML
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/stellar-toml/:domain` | Fetch and parse stellar.toml for a domain | — |
+
+### Utilities
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/utils/friendbot/:accountId` | Fund a testnet account via Friendbot | — |
+| GET | `/utils/convert` | Convert between XLM and stroops | `xlm` or `stroops` |
+| GET | `/utils/validate-account` | Validate a Stellar public key format | `id` |
+| GET | `/utils/validate-asset` | Validate a Stellar asset code format | `code` |
+| GET | `/utils/memo` | Decode a raw Horizon memo | `type`, `value` |
+| GET | `/utils/base64` | Encode or decode Base64 strings | `encode` or `decode` |
+| GET | `/utils/ledger-date` | Estimate close date for a ledger sequence | `sequence` |
+| GET | `/utils/keypair` | Generate a random testnet keypair | — |
+| POST | `/utils/decode-xdr` | Decode a transaction XDR envelope to JSON | Body: `xdr` |
+
+### Cache
+
+| Method | Path | Description | Query Params |
+| ------ | ---- | ----------- | ------------ |
+| GET | `/cache/stats` | Cache hit rate and performance statistics | — |
 
 ---
 
@@ -106,6 +186,12 @@ StellarKit API currently supports Soroban contract inspection through the `/soro
 - `src/middleware/` — validation, error handling, rate limiting
 - `tests/` — API and integration tests
 - `types/index.d.ts` — exported TypeScript type definitions
+
+---
+
+## Documentation
+
+- [API Design Guidelines](docs/api-design.md) — Explains StellarKit's response envelope, pagination conventions, asset shapes, timestamp formats, amount formats, and error structure.
 
 ---
 
@@ -1070,9 +1156,9 @@ You will encounter XDR fields in several places across the StellarKit API:
 | Field             | Endpoint                                                        | Description                                                                                                                                                          |
 | ----------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `envelopeXdr`     | `GET /transactions/:id`, `GET /account/:id/transactions/search` | The full signed transaction envelope. Contains the transaction body, all operations, and all signatures. This is the exact bytes that were submitted to the network. |
-| `envelope_xdr`    | `GET /stream/transactions/:id` (SSE stream)                     | Same envelope data, returned in the raw Horizon field name format used by the streaming formatter.                                                                   |
-| `result_xdr`      | `GET /stream/transactions/:id` (SSE stream)                     | The transaction result as recorded by the ledger. Encodes whether the transaction succeeded and the result code for each operation.                                  |
-| `result_meta_xdr` | `GET /stream/transactions/:id` (SSE stream)                     | Ledger entry changes produced by the transaction — which accounts, trustlines, offers, or data entries were created, updated, or deleted.                            |
+| `envelopeXdr`     | `GET /stream/transactions/:id` (SSE stream)                     | Same envelope data, returned via the streaming transaction formatter.                                                                                                |
+| `resultXdr`       | `GET /stream/transactions/:id` (SSE stream)                     | The transaction result as recorded by the ledger. Encodes whether the transaction succeeded and the result code for each operation.                                  |
+| `resultMetaXdr`   | `GET /stream/transactions/:id` (SSE stream)                     | Ledger entry changes produced by the transaction — which accounts, trustlines, offers, or data entries were created, updated, or deleted.                            |
 
 ### When You Need to Decode XDR
 

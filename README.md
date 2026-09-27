@@ -44,6 +44,7 @@ This project is ideal for:
 - [SDK Migration Guide](docs/sdk-migration.md) — migrating from the JavaScript SDK to the TypeScript SDK
 - [SDK README](sdk/README.md) — JavaScript client usage and method reference
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
+- [SEP Integration Guide](docs/sep-integration.md) - Use StellarKit discovery, account, asset, fee, and monitoring endpoints in SEP-10, SEP-24, and SEP-31 workflows
 - [Soroban Integration Guide](docs/soroban-integration.md) - End-to-end workflow for querying contract state, monitoring events, checking expiry, and simulating invocations
 - [Production Deployment Guide](docs/deployment.md) - Deploy to production with Node.js, Docker, Railway, Render, or Fly.io
 - [API Design Guidelines](docs/api-design.md) - Design conventions and response patterns
@@ -214,6 +215,7 @@ See [docs/soroban.md](docs/soroban.md) for a full walkthrough with curl examples
 
 ## Documentation
 
+- [docs/sep-integration.md](docs/sep-integration.md) — SEP-10 authentication, SEP-24 hosted transfers, and SEP-31 cross-border payment workflows using StellarKit.
 - [docs/soroban.md](docs/soroban.md) — Soroban contract endpoints: what Soroban is, how contract IDs work, and how to inspect deployed contracts via `/soroban/contract/:id`, `/soroban/contract/:id/storage`, and `/soroban/contract/:id/functions`.
 - [docs/account-endpoints.md](docs/account-endpoints.md) — Account endpoints grouped by use case (portfolio, activity, multisig, compliance) with curl examples for every endpoint.
 - [docs/webhooks.md](docs/webhooks.md) — Webhook registration, events, payloads, signature verification, retries, and unregistration.

@@ -44,6 +44,7 @@ This project is ideal for:
 - [SDK Migration Guide](docs/sdk-migration.md) — migrating from the JavaScript SDK to the TypeScript SDK
 - [SDK README](sdk/README.md) — JavaScript client usage and method reference
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
+- [SEP Integration Guide](docs/sep-integration.md) - Use StellarKit discovery, account, asset, fee, and monitoring endpoints in SEP-10, SEP-24, and SEP-31 workflows
 - [Soroban Integration Guide](docs/soroban-integration.md) - End-to-end workflow for querying contract state, monitoring events, checking expiry, and simulating invocations
 - [Production Deployment Guide](docs/deployment.md) - Deploy to production with Node.js, Docker, Railway, Render, or Fly.io
 - [API Design Guidelines](docs/api-design.md) - Design conventions and response patterns
@@ -53,6 +54,8 @@ This project is ideal for:
 - [Webhook Security Guide](docs/webhook-security.md) - Verify HMAC-SHA256 delivery signatures in Node.js/Python/Go, handle invalid signatures, store secrets safely, and rotate with the dual-secret pattern
 - [Batch Endpoints Guide](docs/batch-endpoints.md) - Batch trust-status, freeze-status, and transaction status APIs, limits, and when to use batch vs individual
 - [DEX Endpoints Guide](docs/dex-endpoints.md) - All six DEX endpoints with curl examples, sample responses, and guidance on spread vs depth vs imbalance vs arbitrage
+- [Compliance Endpoints Guide](docs/compliance-endpoints.md) - All compliance and risk endpoints with curl examples, sample responses, and a complete compliance workflow
+- [Network Endpoints Guide](docs/network-endpoints.md) - All network and fee endpoints with curl examples, cache TTLs, and sample responses
 - [Caching Strategy](docs/caching-strategy.md) - Per-endpoint cache TTLs and configuration
 - [Logging Guide](docs/logging.md) - Log levels, configuration, structured log entry fields, JSON parsing, and production monitoring
 - [Monitoring Guide](docs/monitoring.md) - Key metrics, alert thresholds, health check polling strategy, and integration patterns for Prometheus, Datadog, CloudWatch, and uptime tools
@@ -61,6 +64,7 @@ This project is ideal for:
 - [Error Reference](docs/error-reference.md) - All error types, status codes, and suggested fixes
 - [Error Codes](docs/error-codes.md) - HTTP status code reference with descriptions, scenarios, and sample responses
 - [Account Endpoints Guide](docs/account-endpoints.md) - Account endpoints grouped by use case (portfolio, activity, multisig, compliance) with curl examples for every endpoint
+- [Transaction Endpoints Guide](docs/transaction-endpoints.md) - Transaction and operation endpoints for building explorers and submission tools, with curl examples and usage patterns
 - [Rate Limiting](docs/rate-limiting.md) - Default limits, configuration, response headers, and retry strategies
 - [Frequently Asked Questions (FAQ)](FAQ.md) - Common setup and contribution questions
 - [Utilities Guide](docs/utilities.md) - All utility endpoints with use cases, curl examples, and sample responses
@@ -79,6 +83,7 @@ This project is ideal for:
 | GET | `/network-status` | Latest ledger, fees, and protocol info | `fresh` |
 | GET | `/network/ledger-timing` | Analyze ledger close time consistency | — |
 | GET | `/network/validators` | Current validator list grouped by organisation | `fresh` |
+| GET | `/network/validator-quorum` | Current quorum health status | `fresh` |
 | GET | `/network/base-fee` | Current network base fee in stroops and XLM | `fresh` |
 | GET | `/network/fee-percentiles` | Fee distribution percentiles from recent activity | `fresh` |
 
@@ -102,12 +107,14 @@ This project is ideal for:
 | GET | `/account/:id/sequence` | Current sequence number | — |
 | GET | `/account/:id/trustlines` | Trustlines with TOML asset metadata resolved | `assetCode`, `sponsored` |
 | GET | `/account/:id/payments` | Payment and create_account operations | `limit`, `order`, `cursor`, `assetCode`, `assetIssuer` |
+| GET | `/account/:id/funding-history` | Account funding sources with sender, amount, asset, and timestamp | — |
 | GET | `/account/:id/trades` | DEX trades for the account | `limit`, `order`, `cursor`, `fresh` |
 | GET | `/account/:id/offers` | Open DEX offers for an account | `limit`, `cursor` |
 | GET | `/account/:id/offer-history` | Historical offer operations | `limit`, `order`, `cursor` |
 | GET | `/account/:id/analytics` | Account activity analytics: transaction frequency, first/last seen timestamps, and average transactions per day | — |
 | GET | `/account/:id/transaction-count` | Total transaction count, first and last transaction timestamps | — |
 | GET | `/account/:id/inactivity` | Days since last transaction and status | — |
+| GET | `/account/:id/funding-history` | Initial funding sources sorted by amount descending | — |
 | GET | `/account/:id/volume` | Transaction volume by asset over a time period (default: 30 days, max: 90 days) | `days` (default: 30, max: 90) |
 | GET | `/account/:id/risk-score` | Computed risk score and contributing factors | — |
 | GET | `/account/:id/freeze-status/:assetCode/:assetIssuer` | Check if an asset is frozen on an account | — |
@@ -138,6 +145,7 @@ This project is ideal for:
 | GET | `/asset/:code/:issuer/distribution` | Holder concentration and Gini coefficient | — |
 | GET | `/asset/:code/:issuer/supply` | Total, circulating, and locked supply breakdown | — |
 | GET | `/asset/:code/:issuer/verify` | Verify issuer via flags, home_domain, and stellar.toml | — |
+| GET | `/asset/:code/:issuer/issuance-history` | Time series of supply changes over a specified period | `resolution` (7d, 30d, 90d) |
 | GET | `/asset/search` | Search assets by code across all issuers | `code`, `limit` |
 
 ### DEX
@@ -217,6 +225,7 @@ See [docs/soroban.md](docs/soroban.md) for a full walkthrough with curl examples
 
 ## Documentation
 
+- [docs/sep-integration.md](docs/sep-integration.md) — SEP-10 authentication, SEP-24 hosted transfers, and SEP-31 cross-border payment workflows using StellarKit.
 - [docs/soroban.md](docs/soroban.md) — Soroban contract endpoints: what Soroban is, how contract IDs work, and how to inspect deployed contracts via `/soroban/contract/:id`, `/soroban/contract/:id/storage`, and `/soroban/contract/:id/functions`.
 - [docs/account-endpoints.md](docs/account-endpoints.md) — Account endpoints grouped by use case (portfolio, activity, multisig, compliance) with curl examples for every endpoint.
 - [docs/webhooks.md](docs/webhooks.md) — Webhook registration, events, payloads, signature verification, retries, and unregistration.

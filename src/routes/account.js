@@ -5149,6 +5149,172 @@ router.get("/:id/watchlist-status", async (req, res, next) => {
   }
 });
 
+/**
+ * GET /account/:id/funding-history
+ *
+ * Returns the account's earliest payment operations to show how the account
+ * was funded. Fetches inbound payments and create_account operations and
+ * returns the top funding sources sorted by amount descending.
+ *
+ * Returns 404 when the account does not exist.
+ * Returns the initial funding sources for an account, sorted by amount descending.
+ * Identifies where an account's initial XLM came from.
+ *
+ * Response shape:
+ *   {
+ *     success: true,
+ *     data: {
+ *       accountId: string,
+ *       sources: [{ from: string, amount: string, timestamp: string, transactionHash: string }],
+ *       firstFundedAt: string,
+ *       totalSources: number
+ *     }
+ *   }
+ *
+ * @example
+ * GET /account/GABC.../funding-history
+ */
+router.get("/:id/funding-history", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    await withHorizonTiming(req, () => server.loadAccount(id));
+
+    const paymentsResponse = await server
+      .payments()
+      .forAccount(id)
+      .order("asc")
+      .limit(200)
+      .call();
+
+    const operations = paymentsResponse.records || [];
+
+    const fundingSources = [];
+    let firstFundedAt = null;
+
+    for (const op of operations) {
+      let sender = null;
+      let amount = null;
+      let asset = null;
+
+      if (op.type === "create_account" && op.account === id) {
+        sender = op.funder;
+        amount = parseFloat(op.starting_balance || "0");
+        asset = { code: "XLM", issuer: null, type: "native" };
+        if (!firstFundedAt) firstFundedAt = op.created_at;
+      } else if (op.type === "payment" && op.to === id) {
+        sender = op.from;
+        amount = parseFloat(op.amount || "0");
+        const assetType = op.asset_type || "native";
+        asset = isNativeAsset({ type: assetType })
+          ? { code: "XLM", issuer: null, type: "native" }
+          : {
+              code: op.asset_code || null,
+              issuer: op.asset_issuer || null,
+              type: assetType,
+            };
+        if (!firstFundedAt) firstFundedAt = op.created_at;
+      } else if (
+        (op.type === "path_payment_strict_receive" || op.type === "path_payment_strict_send") &&
+        op.to === id
+      ) {
+        sender = op.from;
+        amount = parseFloat(op.amount || "0");
+        const assetType = op.asset_type || "native";
+        asset = isNativeAsset({ type: assetType })
+          ? { code: "XLM", issuer: null, type: "native" }
+          : {
+              code: op.asset_code || null,
+              issuer: op.asset_issuer || null,
+              type: assetType,
+            };
+        if (!firstFundedAt) firstFundedAt = op.created_at;
+      }
+
+      if (sender && amount > 0 && asset) {
+        fundingSources.push({
+          sender,
+          amount: amount.toFixed(7),
+          asset,
+          timestamp: op.created_at,
+        });
+      }
+    }
+
+    fundingSources.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
+
+    const totalFundingAmount = fundingSources.reduce(
+      (sum, source) => sum + parseFloat(source.amount),
+      0
+    ).toFixed(7);
+
+    return success(res, {
+      accountId: id,
+      fundingSources,
+      firstFundedAt,
+      totalFundingAmount,
+    });
+    const account = await withHorizonTiming(req, () => server.loadAccount(id));
+
+    // Get payments into this account, ordered by oldest first
+    const paymentsResponse = await withHorizonTiming(req, () =>
+      server
+        .payments()
+        .forAccount(id)
+        .order("asc")
+        .limit(200)
+        .call()
+    );
+
+    const records = paymentsResponse.records || [];
+
+    // Find create_account and early payment operations
+    const fundingSources = [];
+    let firstFundedAt = null;
+
+    for (const payment of records) {
+      // Only collect initial funding sources (first 10 unique sources)
+      if (fundingSources.length >= 10) break;
+
+      if (payment.type === "create_account" && payment.account === id) {
+        fundingSources.push({
+          from: payment.funder,
+          amount: payment.starting_balance,
+          timestamp: toISOTimestamp(payment.created_at),
+          transactionHash: payment.transaction_hash,
+        });
+        if (!firstFundedAt) firstFundedAt = toISOTimestamp(payment.created_at);
+      } else if (payment.type === "payment" && payment.to === id && isNativeAsset({ type: payment.asset_type })) {
+        const existingSource = fundingSources.find(s => s.from === payment.from);
+        if (!existingSource) {
+          fundingSources.push({
+            from: payment.from,
+            amount: payment.amount,
+            timestamp: toISOTimestamp(payment.created_at),
+            transactionHash: payment.transaction_hash,
+          });
+          if (!firstFundedAt) firstFundedAt = toISOTimestamp(payment.created_at);
+        }
+      }
+    }
+
+    // Sort by amount descending
+    fundingSources.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
+
+    const data = {
+      accountId: id,
+      sources: fundingSources,
+      firstFundedAt: firstFundedAt || null,
+      totalSources: fundingSources.length,
+    };
+
+    return success(res, data);
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
 module.exports = router;
 
 // SHELL_SYNC_MARKER

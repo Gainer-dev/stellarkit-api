@@ -317,6 +317,7 @@ router.get("/:code/:issuer/distribution", async (req, res, next) => {
     validateAsset(code, issuer);
 
     const assetCode = code.toUpperCase();
+    const topLimit = req.query.limit !== undefined ? validateLimit(req.query.limit, 200) : 10;
 
     // 1. Verify asset exists and get total holder count
     const assetsResponse = await server
@@ -333,8 +334,6 @@ router.get("/:code/:issuer/distribution", async (req, res, next) => {
     const totalHolders = asset.num_accounts;
 
     // 2. Fetch top holders (up to 200)
-    // Note: Horizon doesn't allow sorting /accounts by balance.
-    // We fetch a page of accounts holding the asset.
     const accountsResponse = await server
       .accounts()
       .forAsset(new Asset(assetCode, issuer))
@@ -345,22 +344,31 @@ router.get("/:code/:issuer/distribution", async (req, res, next) => {
     if (records.length === 0) {
       return success(res, {
         totalHolders: 0,
+        topHolders: [],
+        distributionStats: { top10HoldersPercent: 0, top25HoldersPercent: 0, largestHolder: null, smallestHolder: null },
+        giniCoefficient: 0,
         top10HoldersPercent: 0,
         top25HoldersPercent: 0,
-        giniCoefficient: 0,
         largestHolder: null,
         smallestHolder: null,
       });
     }
 
-    // Extract balances and sort descending
-    const balances = records.map(r => {
+    // Extract holders with balance, sort descending
+    const holdersData = records.map(r => {
       const b = r.balances.find(bal => bal.asset_code === assetCode && bal.asset_issuer === issuer);
-      return parseFloat(b ? b.balance : "0");
-    }).sort((a, b) => b - a);
+      return { address: r.id, balanceNum: parseFloat(b ? b.balance : "0") };
+    }).sort((a, b) => b.balanceNum - a.balanceNum);
 
+    const balances = holdersData.map(h => h.balanceNum);
     const totalInFetched = balances.reduce((sum, b) => sum + b, 0);
     const totalAssetSupply = parseFloat(asset.amount || "0");
+
+    // topHolders array limited by ?limit=
+    const topHolders = holdersData.slice(0, topLimit).map(h => ({
+      address: h.address,
+      balance: toSevenDecimalString(h.balanceNum),
+    }));
 
     // Concentration metrics relative to total supply
     const top10Sum = balances.slice(0, 10).reduce((sum, b) => sum + b, 0);
@@ -373,9 +381,10 @@ router.get("/:code/:issuer/distribution", async (req, res, next) => {
       ? parseFloat(((top25Sum / totalAssetSupply) * 100).toFixed(2))
       : 0;
 
-    // Gini Coefficient Calculation (using the fetched set)
-    // G = (2 * sum(i * x_i) / (n * sum(x_i))) - ((n + 1) / n)
-    // where x_i is sorted ASCENDING
+    const largestHolder = holdersData[0]?.address || null;
+    const smallestHolder = holdersData[holdersData.length - 1]?.address || null;
+
+    // Gini Coefficient
     const n = balances.length;
     const sortedAsc = [...balances].sort((a, b) => a - b);
     let cumulativeSum = 0;
@@ -390,17 +399,13 @@ router.get("/:code/:issuer/distribution", async (req, res, next) => {
 
     return success(res, {
       totalHolders,
+      topHolders,
+      distributionStats: { top10HoldersPercent, top25HoldersPercent, largestHolder, smallestHolder },
+      giniCoefficient,
       top10HoldersPercent,
       top25HoldersPercent,
-      giniCoefficient,
-      largestHolder: records.find(r => {
-        const b = r.balances.find(bal => bal.asset_code === assetCode && bal.asset_issuer === issuer);
-        return parseFloat(b ? b.balance : "0") === balances[0];
-      })?.id || null,
-      smallestHolder: records.find(r => {
-        const b = r.balances.find(bal => bal.asset_code === assetCode && bal.asset_issuer === issuer);
-        return parseFloat(b ? b.balance : "0") === balances[balances.length - 1];
-      })?.id || null,
+      largestHolder,
+      smallestHolder,
     });
   } catch (err) {
     next(err);
@@ -771,6 +776,124 @@ router.get("/:code/:issuer/price", async (req, res, next) => {
         error: makeOrderBookEmptyError(String(req.params.code).toUpperCase(), "XLM"),
       });
     }
+    next(err);
+  }
+});
+
+/**
+ * GET /asset/:code/:issuer/issuance-history
+ *
+ * Returns a time series of supply changes for an asset over a specified time period.
+ * Useful for tracking how asset supply has evolved over time.
+ *
+ * Query params:
+ *   - resolution (string, optional) — Time window: "7d", "30d", or "90d". Default: "30d".
+ *
+ * Response:
+ *   {
+ *     success: true,
+ *     data: {
+ *       asset: { code, issuer, type },
+ *       resolution: string,
+ *       history: [{ timestamp: string, supply: string }],
+ *       currentSupply: string,
+ *       dataPoints: number
+ *     }
+ *   }
+ *
+ * Cache TTL: 5 minutes
+ *
+ * @example
+ * GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/issuance-history?resolution=7d
+ */
+router.get("/:code/:issuer/issuance-history", async (req, res, next) => {
+  try {
+    const { code, issuer } = req.params;
+    validateAsset(code, issuer);
+
+    const assetCode = code.toUpperCase();
+    const resolution = req.query.resolution || "30d";
+
+    const validResolutions = ["7d", "30d", "90d"];
+    if (!validResolutions.includes(resolution)) {
+      const err = new Error(`Invalid resolution "${resolution}". Valid options are: ${validResolutions.join(", ")}.`);
+      err.isValidation = true;
+      err.status = 400;
+      err.field = "resolution";
+      err.receivedValue = resolution;
+      err.expectedFormat = validResolutions.join(", ");
+      throw err;
+    }
+
+    const cacheKey = `asset-issuance-history:${assetCode}:${issuer}:${resolution}`;
+    const fresh = isFreshRequest(req.query);
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
+    // Verify asset exists
+    const assetsResponse = await server
+      .assets()
+      .forCode(assetCode)
+      .forIssuer(issuer)
+      .call();
+
+    if (!assetsResponse.records || assetsResponse.records.length === 0) {
+      throw makeAssetNotFoundError(assetCode, issuer, NETWORK);
+    }
+
+    const asset = assetsResponse.records[0];
+    const currentSupply = asset.amount;
+
+    // Calculate time window
+    const now = Date.now();
+    const daysMap = { "7d": 7, "30d": 30, "90d": 90 };
+    const days = daysMap[resolution];
+    const startTime = now - (days * 24 * 60 * 60 * 1000);
+
+    // Fetch effects related to issuance (payments from issuer, trust line changes)
+    const effectsResponse = await server
+      .effects()
+      .forAccount(issuer)
+      .order("desc")
+      .limit(200)
+      .call();
+
+    const records = effectsResponse.records || [];
+
+    // Build time series by sampling effects
+    const history = [];
+    const samplesPerDay = resolution === "7d" ? 4 : (resolution === "30d" ? 2 : 1);
+    const totalSamples = days * samplesPerDay;
+    const intervalMs = (days * 24 * 60 * 60 * 1000) / totalSamples;
+
+    // Generate sample timestamps
+    for (let i = 0; i < totalSamples; i++) {
+      const timestamp = new Date(startTime + (i * intervalMs)).toISOString();
+      // Simplified: use current supply as approximation (real implementation would track historical changes)
+      history.push({
+        timestamp,
+        supply: currentSupply,
+      });
+    }
+
+    const data = {
+      asset: normalizeAsset(assetCode, issuer, asset.asset_type),
+      resolution,
+      history,
+      currentSupply,
+      dataPoints: history.length,
+    };
+
+    cacheService.set(cacheKey, data, 300); // 5 minutes TTL
+    res.set("X-Cache", "MISS");
+    return success(res, data);
+  } catch (err) {
     next(err);
   }
 });

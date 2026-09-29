@@ -1009,4 +1009,269 @@ router.get("/price-history/:sellAsset/:buyAsset", async (req, res, next) => {
   }
 });
 
+/**
+ * @route GET /dex/market-summary/:baseAsset/:counterAsset
+ * @desc Returns a 24-hour market summary for a trading pair including open, high, low,
+ *   close prices, base/counter volume, trade count, and 24-hour price change metrics.
+ * @param {string} req.params.baseAsset    - Base asset in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} req.params.counterAsset - Counter asset in `CODE:ISSUER` format or `XLM:native`.
+ * @returns {Promise<void>} JSON payload with pair, open, high, low, close, baseVolume,
+ *   counterVolume, tradeCount, priceChange24h, and priceChangePercent24h.
+ * @example
+ * curl -s "http://localhost:3000/dex/market-summary/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" | jq
+ * GET /dex/market-summary/:baseAsset/:counterAsset
+ *
+ * Computes 24-hour OHLCV data from trade history for an asset pair.
+ * open  = price of the oldest trade in the window
+ * close = price of the most recent trade
+ * high/low = extremes across all trades in the window
+ */
+router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) => {
+  try {
+    const { baseAsset, counterAsset } = req.params;
+
+    let base, counter;
+    try {
+      base = parseDexAssetParam(baseAsset);
+      counter = parseDexAssetParam(counterAsset);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: { type: "ValidationError", message: err.message },
+      });
+    }
+
+    const cacheKey = `dex:market-summary:${baseAsset}:${counterAsset}`;
+    const MARKET_SUMMARY_CACHE_TTL = 60; // 60 seconds
+
+    const cached = cacheService.get(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      return success(res, cached);
+    }
+    res.set("X-Cache", "MISS");
+
+    // Fetch trades for the pair over the last 24 hours
+    const now = Date.now();
+    const windowStart = now - 24 * 60 * 60 * 1000;
+    const fresh = req.query.fresh === "true";
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
+    const windowStartMs = Date.now() - 24 * 60 * 60 * 1000;
+
+    const tradesResponse = await server
+      .trades()
+      .forAssetPair(base, counter)
+      .order("desc")
+      .limit(200)
+      .call();
+
+    const allTrades = tradesResponse.records || [];
+
+    // Filter to trades within the last 24 hours
+    const trades = allTrades.filter((t) => {
+      const tradeTime = new Date(t.ledger_close_time).getTime();
+      return tradeTime >= windowStart;
+    });
+    const trades = (tradesResponse.records || []).filter(
+      (t) => new Date(t.ledger_close_time).getTime() >= windowStartMs,
+    );
+
+    if (trades.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: makeOrderBookEmptyError(base.getCode(), counter.getCode()),
+      });
+    }
+
+    // Compute OHLCV metrics
+    // Trades are ordered desc (newest first); reverse to get chronological order
+    const chronological = trades.slice().reverse();
+
+    let open = 0;
+    let close = 0;
+    let high = -Infinity;
+    let low = Infinity;
+    let baseVolume = 0;
+    let counterVolume = 0;
+
+    for (const trade of chronological) {
+      const price = tradePrice(trade);
+      const baseAmt = parseFloat(trade.base_amount || "0");
+      const counterAmt = parseFloat(trade.counter_amount || "0");
+
+      if (price > high) high = price;
+      if (price < low) low = price;
+
+      baseVolume += baseAmt;
+      counterVolume += counterAmt;
+    }
+
+    // Open = price of the oldest trade in the window
+    open = tradePrice(chronological[0]);
+    // Close = price of the most recent trade
+    close = tradePrice(chronological[chronological.length - 1]);
+
+    const priceChange24h = close - open;
+    const priceChangePercent24h = open !== 0 ? (priceChange24h / open) * 100 : 0;
+        error: makeOrderBookEmptyError(
+          base.isNative() ? "XLM" : base.getCode(),
+          counter.isNative() ? "XLM" : counter.getCode(),
+        ),
+      });
+    }
+
+    // trades are desc (newest first); close = index 0, open = last index
+    const prices = trades.map((t) => tradePrice(t));
+    const close = prices[0];
+    const open = prices[prices.length - 1];
+    const high = Math.max(...prices);
+    const low = Math.min(...prices);
+    const baseVolume = trades.reduce((sum, t) => sum + parseFloat(t.base_amount || "0"), 0);
+    const counterVolume = trades.reduce((sum, t) => sum + parseFloat(t.counter_amount || "0"), 0);
+    const priceChangePercent24h = open > 0 ? ((close - open) / open) * 100 : 0;
+
+    const data = {
+      pair: `${baseAsset}/${counterAsset}`,
+      open: open.toFixed(7),
+      high: high.toFixed(7),
+      low: low.toFixed(7),
+      close: close.toFixed(7),
+      baseVolume: baseVolume.toFixed(7),
+      counterVolume: counterVolume.toFixed(7),
+      tradeCount: trades.length,
+      priceChange24h: priceChange24h.toFixed(7),
+      priceChangePercent24h: priceChangePercent24h.toFixed(7),
+    };
+
+    cacheService.set(cacheKey, data, MARKET_SUMMARY_CACHE_TTL);
+
+    return success(res, data);
+  } catch (err) {
+      priceChangePercent24h: priceChangePercent24h.toFixed(4),
+      tradeCount: trades.length,
+    };
+
+    cacheService.set(cacheKey, data, cacheTTL.topMarkets);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /dex/liquidity-depth/:baseAsset/:counterAsset
+ *
+ * Returns cumulative bid and ask volume at configurable price intervals,
+ * helping developers estimate slippage before submitting a trade.
+ *
+ * Query params:
+ *   levels (number, 1–50, default: 10) — number of price levels to return
+ */
+router.get("/liquidity-depth/:baseAsset/:counterAsset", async (req, res, next) => {
+  try {
+    const { baseAsset, counterAsset } = req.params;
+
+    const MAX_LEVELS = 50;
+    const DEFAULT_LEVELS = 10;
+    let levels = DEFAULT_LEVELS;
+
+    if (req.query.levels !== undefined) {
+      const parsed = parseInt(req.query.levels, 10);
+      if (isNaN(parsed) || parsed < 1) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            type: "ValidationError",
+            message: "levels must be a positive integer between 1 and 50.",
+          },
+        });
+      }
+      levels = Math.min(parsed, MAX_LEVELS);
+    }
+
+    let selling, buying;
+    try {
+      selling = parseDexAssetParam(baseAsset);
+      buying = parseDexAssetParam(counterAsset);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: { type: "ValidationError", message: err.message },
+      });
+    }
+
+    const orderBookResponse = await server
+      .orderbook(selling, buying)
+      .limit(200)
+      .call();
+
+    const rawBids = orderBookResponse.bids || [];
+    const rawAsks = orderBookResponse.asks || [];
+
+    if (rawBids.length === 0 && rawAsks.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: makeOrderBookEmptyError(
+          selling.isNative() ? "XLM" : selling.getCode(),
+          buying.isNative() ? "XLM" : buying.getCode(),
+        ),
+      });
+    }
+
+    function buildDepthLevels(entries, count) {
+      let cumulative = 0;
+      return entries.slice(0, count).map((entry) => {
+        const vol = parseFloat(entry.amount);
+        cumulative += vol;
+        return {
+          price: parseFloat(entry.price).toFixed(7),
+          volume: vol.toFixed(7),
+          cumulativeVolume: cumulative.toFixed(7),
+        };
+      });
+    }
+
+    const bids = buildDepthLevels(rawBids, levels);
+    const asks = buildDepthLevels(rawAsks, levels);
+
+    const totalBidVolume = rawBids.reduce((sum, b) => sum + parseFloat(b.amount), 0);
+    const totalAskVolume = rawAsks.reduce((sum, a) => sum + parseFloat(a.amount), 0);
+
+    const bestBid = rawBids.length > 0 ? parseFloat(rawBids[0].price) : null;
+    const bestAsk = rawAsks.length > 0 ? parseFloat(rawAsks[0].price) : null;
+    const midPrice =
+      bestBid !== null && bestAsk !== null
+        ? ((bestBid + bestAsk) / 2).toFixed(7)
+        : (bestBid ?? bestAsk ?? 0).toFixed(7);
+
+    const data = {
+      pair: `${baseAsset}/${counterAsset}`,
+      bids,
+      asks,
+      totalBidVolume: totalBidVolume.toFixed(7),
+      totalAskVolume: totalAskVolume.toFixed(7),
+      midPrice,
+    };
+
+    return success(res, data);
+  } catch (err) {
+    if (err.response && err.response.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: makeOrderBookEmptyError(req.params.baseAsset, req.params.counterAsset),
+      });
+    }
+    next(err);
+  }
+});
+
 module.exports = router;

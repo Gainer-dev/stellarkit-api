@@ -17,7 +17,7 @@ const {
   makeOrderBookEmptyError,
 } = require("../utils/errors");
 const cacheTTL = require("../config/cacheConfig");
-const { normalizeAsset } = require("../utils/asset");
+const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
 const { fetchNormalisedToml } = require("../utils/tomlResolver");
 const { isNativeAsset } = require("../utils/assetHelpers");
 router.use(normalizeAssetCode);
@@ -407,6 +407,59 @@ router.get("/:code/:issuer/distribution", async (req, res, next) => {
       largestHolder,
       smallestHolder,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /asset/:code/:issuer/liquidity-pools
+ * Lists the liquidity pools that contain the specified asset.
+ *
+ * Query params:
+ *   limit  (number, 1–100, default: 20)
+ *   cursor (string) — paging token from a previous response
+ *
+ * Use `XLM/native` for the native asset.
+ *
+ * @example
+ * GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/liquidity-pools?limit=10
+ */
+router.get("/:code/:issuer/liquidity-pools", async (req, res, next) => {
+  try {
+    const { code, issuer } = req.params;
+    const isNative = code.toUpperCase() === "XLM" && issuer.toLowerCase() === "native";
+    if (!isNative) validateAsset(code, issuer);
+
+    const assetCode = code.toUpperCase();
+    const asset = isNative ? Asset.native() : new Asset(assetCode, issuer);
+    const assetString = isNative ? "native" : `${assetCode}:${issuer}`;
+    const { limit, cursor } = parsePaginationParams(req.query);
+
+    let query = server.liquidityPools().forAssets(asset).limit(limit);
+    if (cursor) query = query.cursor(cursor);
+    const response = await query.call();
+    const records = response.records || [];
+
+    const formatReserve = (r) => ({
+      asset: normalizeAssetFromString(r.asset),
+      amount: toSevenDecimalString(r.amount),
+    });
+
+    const pools = records
+      .filter((p) => (p.reserves || []).some((r) => r.asset === assetString))
+      .map((p) => ({
+        poolId: p.id,
+        fee: p.fee_bp,
+        totalShares: toSevenDecimalString(p.total_shares),
+        reserveA: formatReserve(p.reserves[0]),
+        reserveB: formatReserve(p.reserves[1]),
+        totalTrustlines: parseInt(p.total_trustlines || "0", 10),
+      }));
+
+    const nextCursor = records.length > 0 ? records[records.length - 1].paging_token || null : null;
+
+    return success(res, { pools, total: pools.length, limit, cursor: nextCursor });
   } catch (err) {
     next(err);
   }

@@ -1044,25 +1044,14 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
     const cacheKey = `dex:market-summary:${baseAsset}:${counterAsset}`;
     const MARKET_SUMMARY_CACHE_TTL = 60; // 60 seconds
 
-    const cached = cacheService.get(cacheKey);
-    if (cached) {
-      res.set("X-Cache", "HIT");
-      return success(res, cached);
-    }
-    res.set("X-Cache", "MISS");
-
-    // Fetch trades for the pair over the last 24 hours
-    const now = Date.now();
-    const windowStart = now - 24 * 60 * 60 * 1000;
-    const fresh = req.query.fresh === "true";
-
-    if (!fresh) {
+    if (req.query.fresh !== "true") {
       const cached = cacheService.get(cacheKey);
       if (cached) {
         res.set("X-Cache", "HIT");
         return success(res, cached);
       }
     }
+    res.set("X-Cache", "MISS");
 
     const windowStartMs = Date.now() - 24 * 60 * 60 * 1000;
 
@@ -1073,13 +1062,6 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
       .limit(200)
       .call();
 
-    const allTrades = tradesResponse.records || [];
-
-    // Filter to trades within the last 24 hours
-    const trades = allTrades.filter((t) => {
-      const tradeTime = new Date(t.ledger_close_time).getTime();
-      return tradeTime >= windowStart;
-    });
     const trades = (tradesResponse.records || []).filter(
       (t) => new Date(t.ledger_close_time).getTime() >= windowStartMs,
     );
@@ -1087,40 +1069,6 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
     if (trades.length === 0) {
       return res.status(404).json({
         success: false,
-        error: makeOrderBookEmptyError(base.getCode(), counter.getCode()),
-      });
-    }
-
-    // Compute OHLCV metrics
-    // Trades are ordered desc (newest first); reverse to get chronological order
-    const chronological = trades.slice().reverse();
-
-    let open = 0;
-    let close = 0;
-    let high = -Infinity;
-    let low = Infinity;
-    let baseVolume = 0;
-    let counterVolume = 0;
-
-    for (const trade of chronological) {
-      const price = tradePrice(trade);
-      const baseAmt = parseFloat(trade.base_amount || "0");
-      const counterAmt = parseFloat(trade.counter_amount || "0");
-
-      if (price > high) high = price;
-      if (price < low) low = price;
-
-      baseVolume += baseAmt;
-      counterVolume += counterAmt;
-    }
-
-    // Open = price of the oldest trade in the window
-    open = tradePrice(chronological[0]);
-    // Close = price of the most recent trade
-    close = tradePrice(chronological[chronological.length - 1]);
-
-    const priceChange24h = close - open;
-    const priceChangePercent24h = open !== 0 ? (priceChange24h / open) * 100 : 0;
         error: makeOrderBookEmptyError(
           base.isNative() ? "XLM" : base.getCode(),
           counter.isNative() ? "XLM" : counter.getCode(),
@@ -1136,7 +1084,8 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
     const low = Math.min(...prices);
     const baseVolume = trades.reduce((sum, t) => sum + parseFloat(t.base_amount || "0"), 0);
     const counterVolume = trades.reduce((sum, t) => sum + parseFloat(t.counter_amount || "0"), 0);
-    const priceChangePercent24h = open > 0 ? ((close - open) / open) * 100 : 0;
+    const priceChange24h = close - open;
+    const priceChangePercent24h = open > 0 ? (priceChange24h / open) * 100 : 0;
 
     const data = {
       pair: `${baseAsset}/${counterAsset}`,
@@ -1146,22 +1095,81 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
       close: close.toFixed(7),
       baseVolume: baseVolume.toFixed(7),
       counterVolume: counterVolume.toFixed(7),
-      tradeCount: trades.length,
       priceChange24h: priceChange24h.toFixed(7),
-      priceChangePercent24h: priceChangePercent24h.toFixed(7),
-    };
-
-    cacheService.set(cacheKey, data, MARKET_SUMMARY_CACHE_TTL);
-
-    return success(res, data);
-  } catch (err) {
       priceChangePercent24h: priceChangePercent24h.toFixed(4),
       tradeCount: trades.length,
     };
 
-    cacheService.set(cacheKey, data, cacheTTL.topMarkets);
-    res.set("X-Cache", "MISS");
+    cacheService.set(cacheKey, data, MARKET_SUMMARY_CACHE_TTL);
     return success(res, data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /dex/asset-pairs
+ *
+ * Returns active trading pairs derived from the most recent trade history,
+ * ranked by 24h trade count.
+ *
+ * Query params:
+ *   limit     (number, 1–100, default: 20) — maximum pairs to return
+ *   baseAsset (string) — only return pairs with this base asset. Accepts
+ *             "XLM", "CODE" or "CODE:ISSUER".
+ */
+router.get("/asset-pairs", async (req, res, next) => {
+  try {
+    const limit = req.query.limit !== undefined ? validateLimit(req.query.limit, 100) : 20;
+
+    let baseFilter = null;
+    if (req.query.baseAsset !== undefined) {
+      const [code, issuer] = String(req.query.baseAsset).split(":");
+      const isXlm = code.toUpperCase() === "XLM" && (!issuer || issuer.toLowerCase() === "native");
+      if (!isXlm) {
+        validateAssetCode(code);
+        if (issuer) validateAccountId(issuer);
+      }
+      baseFilter = isXlm
+        ? { code: "XLM", issuer: null }
+        : { code: code.toUpperCase(), issuer: issuer || null };
+    }
+
+    const tradesResponse = await server.trades().order("desc").limit(200).call();
+    const windowStartMs = Date.now() - 24 * 60 * 60 * 1000;
+
+    const pairs = new Map();
+    for (const t of tradesResponse.records || []) {
+      if (new Date(t.ledger_close_time).getTime() < windowStartMs) continue;
+
+      const baseAsset = normalizeAsset(t.base_asset_code, t.base_asset_issuer, t.base_asset_type);
+      const counterAsset = normalizeAsset(t.counter_asset_code, t.counter_asset_issuer, t.counter_asset_type);
+
+      if (baseFilter) {
+        if (baseAsset.code.toUpperCase() !== baseFilter.code) continue;
+        if (baseFilter.issuer && baseAsset.issuer !== baseFilter.issuer) continue;
+      }
+
+      const key = `${baseAsset.code}:${baseAsset.issuer || "native"}/${counterAsset.code}:${counterAsset.issuer || "native"}`;
+      if (!pairs.has(key)) {
+        pairs.set(key, { baseAsset, counterAsset, tradeCount24h: 0, volume: 0 });
+      }
+      const entry = pairs.get(key);
+      entry.tradeCount24h += 1;
+      entry.volume += parseFloat(t.base_amount || "0");
+    }
+
+    const data = [...pairs.values()]
+      .sort((a, b) => b.tradeCount24h - a.tradeCount24h)
+      .slice(0, limit)
+      .map((p) => ({
+        baseAsset: p.baseAsset,
+        counterAsset: p.counterAsset,
+        tradeCount24h: p.tradeCount24h,
+        volume24h: p.volume.toFixed(7),
+      }));
+
+    return success(res, { pairs: data, total: data.length, limit });
   } catch (err) {
     next(err);
   }

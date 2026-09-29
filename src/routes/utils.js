@@ -177,9 +177,6 @@ router.post("/validate-memo", (req, res, next) => {
     const result = validateMemo(type, value);
     return success(res, result);
   } catch (err) {
-    next(err);
-    return success(res, validateMemo(type, value));
-  } catch (err) {
     return next(err);
   }
 });
@@ -593,6 +590,107 @@ router.get("/keypair", (req, res, next) => {
     });
   } catch (err) {
     next(err);
+  }
+});
+
+/**
+ * POST /utils/simulate-payment
+ * Dry-runs a payment against live account state without submitting anything.
+ *
+ * Body: { source, destination, amount, assetCode?, assetIssuer? }
+ * Omit assetCode (or pass "XLM") for native payments.
+ *
+ * Checks performed:
+ *   - sender exists and has enough spendable balance (XLM keeps the minimum reserve)
+ *   - destination exists
+ *   - destination holds an authorized trustline for non-native assets
+ *
+ * @returns {{ canSend: boolean, warnings: Array<{ type: string, message: string }> }}
+ */
+router.post("/simulate-payment", async (req, res, next) => {
+  try {
+    const { source, destination, amount, assetCode, assetIssuer } = req.body || {};
+    validateAccountId(source);
+    validateAccountId(destination);
+
+    const amountNum = Number(amount);
+    if (amount === undefined || amount === null || !Number.isFinite(amountNum) || amountNum <= 0) {
+      throw createValidationError("Field 'amount' must be a positive number.");
+    }
+
+    const isNative = !assetCode || String(assetCode).toUpperCase() === "XLM";
+    if (!isNative) validateAccountId(assetIssuer);
+    const code = isNative ? "XLM" : String(assetCode).toUpperCase();
+
+    const matchesAsset = (b) =>
+      isNative
+        ? b.asset_type === "native"
+        : b.asset_code === code && b.asset_issuer === assetIssuer;
+
+    const isNotFound = (err) =>
+      (err && err.response && err.response.status === 404) || (err && err.name === "NotFoundError");
+
+    const warnings = [];
+
+    let sender = null;
+    try {
+      sender = await server.loadAccount(source);
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+      warnings.push({ type: "sender_not_found", message: `Sender account ${source} does not exist.` });
+    }
+
+    if (sender) {
+      const bal = (sender.balances || []).find(matchesAsset);
+      if (!bal) {
+        warnings.push({ type: "balance", message: `Sender does not hold ${code}.` });
+      } else {
+        let available = parseFloat(bal.balance) - parseFloat(bal.selling_liabilities || "0");
+        if (isNative) {
+          const subentries = Number(sender.subentry_count || 0);
+          const sponsoring = Number(sender.num_sponsoring || 0);
+          const sponsored = Number(sender.num_sponsored || 0);
+          available -= (2 + subentries + sponsoring - sponsored) * 0.5;
+        }
+        if (available < amountNum) {
+          warnings.push({
+            type: "balance",
+            message: `Insufficient ${code} balance: ${Math.max(available, 0).toFixed(7)} available, ${amountNum.toFixed(7)} required.`,
+          });
+        }
+      }
+    }
+
+    let recipient = null;
+    try {
+      recipient = await server.loadAccount(destination);
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+      warnings.push({
+        type: "destination_not_found",
+        message: `Destination account ${destination} does not exist.${isNative ? " Use create_account instead." : ""}`,
+      });
+    }
+
+    if (recipient && !isNative) {
+      const line = (recipient.balances || []).find(matchesAsset);
+      if (!line) {
+        warnings.push({ type: "trustline", message: `Recipient has no trustline for ${code}:${assetIssuer}.` });
+      } else if (line.is_authorized === false) {
+        warnings.push({ type: "trustline", message: `Recipient trustline for ${code} is not authorized.` });
+      }
+    }
+
+    return success(res, {
+      canSend: warnings.length === 0,
+      source,
+      destination,
+      amount: amountNum.toFixed(7),
+      asset: isNative ? { code: "XLM", issuer: null, type: "native" } : { code, issuer: assetIssuer, type: code.length <= 4 ? "credit_alphanum4" : "credit_alphanum12" },
+      warnings,
+    });
+  } catch (err) {
+    return next(err);
   }
 });
 

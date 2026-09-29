@@ -53,7 +53,6 @@ const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
 const { isNativeAsset, isNonNativeAsset } = require("../utils/assetHelpers");
 const { getAssetMetadataFromToml } = require("../utils/tomlResolver");
 const { formatBalance } = require("../utils/formatBalance");
-const { validateEffectType } = require("../utils/effectTypes");
 const { parseStellarAmount } = require("../utils/parseStellarAmount");
 const { formatAmount } = require("../utils/formatAmount");
 const { mapAccountTrade } = require("../utils/mapAccountTrade");
@@ -1015,7 +1014,7 @@ router.get("/:id/payments", async (req, res, next) => {
       "subentry-health", "merge-eligibility", "offers", "payments",
       "operation-breakdown", "offer-history", "timeline", "data",
       "pool-positions", "risk-score", "trustline-health", "age", "volume",
-      "payment-summary", "operations",
+      "payment-summary", "net-flow", "operations",
     ];
     if (reservedWords.includes(id)) {
       return next();
@@ -3418,6 +3417,93 @@ router.get("/:id/volume", async (req, res, next) => {
 });
 
 /**
+ * GET /account/:id/net-flow?days=30
+ *
+ * Computes inbound and outbound payment volume per asset over the last
+ * `days` days (1–90, default 30). `net` = inbound − outbound, so a positive
+ * value means the account received more of that asset than it sent.
+ */
+router.get("/:id/net-flow", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const days = parseInt(req.query.days || "30", 10);
+    if (isNaN(days) || days < 1 || days > 90) {
+      const err = new Error(
+        "Query parameter 'days': must be an integer between 1 and 90.",
+      );
+      err.isValidation = true;
+      err.field = "days";
+      err.receivedValue = String(req.query.days);
+      err.expectedFormat = "1–90";
+      throw err;
+    }
+
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const flowMap = {};
+    let cursor;
+
+    for (;;) {
+      let query = server.payments().forAccount(id).limit(200).order("asc");
+      if (cursor) query = query.cursor(cursor);
+
+      const page = await withHorizonTiming(req, () => query.call());
+      const records = page.records || [];
+
+      for (const op of records) {
+        cursor = op.paging_token;
+        if (new Date(op.created_at) < since) continue;
+        if (op.transaction_successful === false) continue;
+
+        let isOutbound;
+        if (op.type === "create_account") {
+          isOutbound = op.funder === id;
+        } else if (op.from === id || op.to === id) {
+          isOutbound = op.from === id;
+        } else {
+          continue;
+        }
+        // Self-payments do not move value in or out.
+        if (op.from === id && op.to === id) continue;
+
+        const assetCode = op.asset_code || "XLM";
+        const assetIssuer = op.asset_issuer || null;
+        const assetKey = assetIssuer ? `${assetCode}:${assetIssuer}` : assetCode;
+        const amount = parseFloat(op.amount || op.starting_balance || "0");
+
+        if (!flowMap[assetKey]) {
+          flowMap[assetKey] = {
+            asset: normalizeAsset(assetCode, assetIssuer, op.asset_type || undefined),
+            inbound: 0,
+            outbound: 0,
+          };
+        }
+        if (isOutbound) flowMap[assetKey].outbound += amount;
+        else flowMap[assetKey].inbound += amount;
+      }
+
+      if (records.length < 200) break;
+    }
+
+    const flows = Object.values(flowMap).map((f) => ({
+      asset: f.asset,
+      inbound: f.inbound.toFixed(7),
+      outbound: f.outbound.toFixed(7),
+      net: (f.inbound - f.outbound).toFixed(7),
+    }));
+
+    return success(res, {
+      accountId: id,
+      period: { days, from: since.toISOString(), to: new Date().toISOString() },
+      flows,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
  * GET /account/:id/payment-summary
  *
  * Returns a summary of an account's payment activity, including:
@@ -5255,61 +5341,6 @@ router.get("/:id/funding-history", async (req, res, next) => {
       firstFundedAt,
       totalFundingAmount,
     });
-    const account = await withHorizonTiming(req, () => server.loadAccount(id));
-
-    // Get payments into this account, ordered by oldest first
-    const paymentsResponse = await withHorizonTiming(req, () =>
-      server
-        .payments()
-        .forAccount(id)
-        .order("asc")
-        .limit(200)
-        .call()
-    );
-
-    const records = paymentsResponse.records || [];
-
-    // Find create_account and early payment operations
-    const fundingSources = [];
-    let firstFundedAt = null;
-
-    for (const payment of records) {
-      // Only collect initial funding sources (first 10 unique sources)
-      if (fundingSources.length >= 10) break;
-
-      if (payment.type === "create_account" && payment.account === id) {
-        fundingSources.push({
-          from: payment.funder,
-          amount: payment.starting_balance,
-          timestamp: toISOTimestamp(payment.created_at),
-          transactionHash: payment.transaction_hash,
-        });
-        if (!firstFundedAt) firstFundedAt = toISOTimestamp(payment.created_at);
-      } else if (payment.type === "payment" && payment.to === id && isNativeAsset({ type: payment.asset_type })) {
-        const existingSource = fundingSources.find(s => s.from === payment.from);
-        if (!existingSource) {
-          fundingSources.push({
-            from: payment.from,
-            amount: payment.amount,
-            timestamp: toISOTimestamp(payment.created_at),
-            transactionHash: payment.transaction_hash,
-          });
-          if (!firstFundedAt) firstFundedAt = toISOTimestamp(payment.created_at);
-        }
-      }
-    }
-
-    // Sort by amount descending
-    fundingSources.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
-
-    const data = {
-      accountId: id,
-      sources: fundingSources,
-      firstFundedAt: firstFundedAt || null,
-      totalSources: fundingSources.length,
-    };
-
-    return success(res, data);
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }

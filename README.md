@@ -46,6 +46,7 @@ This project is ideal for:
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
 - [SEP Integration Guide](docs/sep-integration.md) - Use StellarKit discovery, account, asset, fee, and monitoring endpoints in SEP-10, SEP-24, and SEP-31 workflows
 - [Soroban Integration Guide](docs/soroban-integration.md) - End-to-end workflow for querying contract state, monitoring events, checking expiry, and simulating invocations
+- [Soroban Endpoints Guide](docs/soroban.md) — Soroban contract endpoints: what Soroban is, how contract IDs work, and how to inspect deployed contracts via `/soroban/contract/:id`, `/soroban/contract/:id/storage`, and `/soroban/contract/:id/functions`
 - [Production Deployment Guide](docs/deployment.md) - Deploy to production with Node.js, Docker, Railway, Render, or Fly.io
 - [API Design Guidelines](docs/api-design.md) - Design conventions and response patterns
 - [Response Format Guide](docs/response-format.md) - Standard response envelopes, pagination, and data formats

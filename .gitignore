@@ -4,6 +4,7 @@ coverage/
 *.log
 .DS_Store
 dist/
+*.txt
 
 # Test output artefacts
 test-out*.txt

@@ -1010,6 +1010,15 @@ router.get("/price-history/:sellAsset/:buyAsset", async (req, res, next) => {
 });
 
 /**
+ * @route GET /dex/market-summary/:baseAsset/:counterAsset
+ * @desc Returns a 24-hour market summary for a trading pair including open, high, low,
+ *   close prices, base/counter volume, trade count, and 24-hour price change metrics.
+ * @param {string} req.params.baseAsset    - Base asset in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} req.params.counterAsset - Counter asset in `CODE:ISSUER` format or `XLM:native`.
+ * @returns {Promise<void>} JSON payload with pair, open, high, low, close, baseVolume,
+ *   counterVolume, tradeCount, priceChange24h, and priceChangePercent24h.
+ * @example
+ * curl -s "http://localhost:3000/dex/market-summary/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" | jq
  * GET /dex/market-summary/:baseAsset/:counterAsset
  *
  * Computes 24-hour OHLCV data from trade history for an asset pair.
@@ -1033,6 +1042,18 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
     }
 
     const cacheKey = `dex:market-summary:${baseAsset}:${counterAsset}`;
+    const MARKET_SUMMARY_CACHE_TTL = 60; // 60 seconds
+
+    const cached = cacheService.get(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      return success(res, cached);
+    }
+    res.set("X-Cache", "MISS");
+
+    // Fetch trades for the pair over the last 24 hours
+    const now = Date.now();
+    const windowStart = now - 24 * 60 * 60 * 1000;
     const fresh = req.query.fresh === "true";
 
     if (!fresh) {
@@ -1052,6 +1073,13 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
       .limit(200)
       .call();
 
+    const allTrades = tradesResponse.records || [];
+
+    // Filter to trades within the last 24 hours
+    const trades = allTrades.filter((t) => {
+      const tradeTime = new Date(t.ledger_close_time).getTime();
+      return tradeTime >= windowStart;
+    });
     const trades = (tradesResponse.records || []).filter(
       (t) => new Date(t.ledger_close_time).getTime() >= windowStartMs,
     );
@@ -1059,6 +1087,40 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
     if (trades.length === 0) {
       return res.status(404).json({
         success: false,
+        error: makeOrderBookEmptyError(base.getCode(), counter.getCode()),
+      });
+    }
+
+    // Compute OHLCV metrics
+    // Trades are ordered desc (newest first); reverse to get chronological order
+    const chronological = trades.slice().reverse();
+
+    let open = 0;
+    let close = 0;
+    let high = -Infinity;
+    let low = Infinity;
+    let baseVolume = 0;
+    let counterVolume = 0;
+
+    for (const trade of chronological) {
+      const price = tradePrice(trade);
+      const baseAmt = parseFloat(trade.base_amount || "0");
+      const counterAmt = parseFloat(trade.counter_amount || "0");
+
+      if (price > high) high = price;
+      if (price < low) low = price;
+
+      baseVolume += baseAmt;
+      counterVolume += counterAmt;
+    }
+
+    // Open = price of the oldest trade in the window
+    open = tradePrice(chronological[0]);
+    // Close = price of the most recent trade
+    close = tradePrice(chronological[chronological.length - 1]);
+
+    const priceChange24h = close - open;
+    const priceChangePercent24h = open !== 0 ? (priceChange24h / open) * 100 : 0;
         error: makeOrderBookEmptyError(
           base.isNative() ? "XLM" : base.getCode(),
           counter.isNative() ? "XLM" : counter.getCode(),
@@ -1084,6 +1146,15 @@ router.get("/market-summary/:baseAsset/:counterAsset", async (req, res, next) =>
       close: close.toFixed(7),
       baseVolume: baseVolume.toFixed(7),
       counterVolume: counterVolume.toFixed(7),
+      tradeCount: trades.length,
+      priceChange24h: priceChange24h.toFixed(7),
+      priceChangePercent24h: priceChangePercent24h.toFixed(7),
+    };
+
+    cacheService.set(cacheKey, data, MARKET_SUMMARY_CACHE_TTL);
+
+    return success(res, data);
+  } catch (err) {
       priceChangePercent24h: priceChangePercent24h.toFixed(4),
       tradeCount: trades.length,
     };

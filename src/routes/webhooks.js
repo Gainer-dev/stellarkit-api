@@ -180,32 +180,6 @@ router.post("/register", (req, res, next) => {
 });
 
 /**
- * GET /webhooks/stats
- *
- * Delivery health dashboard for operators. Reports how many webhooks are
- * registered (and how many are active vs paused), delivery outcome totals,
- * the current retry queue size, and the webhooks with the most failures.
- *
- * Response 200:
- *   {
- *     "success": true,
- *     "data": {
- *       "totalWebhooks": 3,
- *       "activeWebhooks": 2,
- *       "pausedWebhooks": 1,
- *       "totalDeliveries": 10,
- *       "successfulDeliveries": 7,
- *       "failedDeliveries": 3,
- *       "retryQueueSize": 1,
- *       "topFailingWebhooks": [ { "webhookId": "wh_...", "failureCount": 2 } ]
- *     }
- *   }
- */
-router.get("/stats", webhookSignatureAuth, (req, res) => {
-  return success(res, buildWebhookStats());
-});
-
-/**
  * POST /webhooks
  *
  * Register a new webhook. The caller provides a callback URL and the list of
@@ -276,6 +250,17 @@ router.get("/", webhookSignatureAuth, (req, res) => {
 });
 
 /**
+ * GET /webhooks/stats
+ *
+ * Delivery health dashboard for operators. Reports how many webhooks are
+ * registered (and how many are active vs paused), delivery outcome totals,
+ * the current retry queue size, and the webhooks with the most failures.
+ */
+router.get("/stats", webhookSignatureAuth, (req, res) => {
+  return success(res, buildWebhookStats());
+});
+
+/**
  * DELETE /webhooks/:webhookId
  *
  * Unregister a webhook by its ID.  Verifies the webhook exists before removal.
@@ -328,6 +313,28 @@ router.delete("/:webhookId", webhookSignatureAuth, (req, res, next) => {
  * POST /webhooks/:webhookId/pause
  *
  * Pause a webhook by setting its status to "paused".
+ * Paused webhooks will not receive events during delivery.
+ *
+ * Response 200 (success):
+ *   {
+ *     "success": true,
+ *     "data": {
+ *       "webhookId": "wh_...",
+ *       "status": "paused",
+ *       "url": "https://...",
+ *       "events": [...],
+ *       "createdAt": "..."
+ *     }
+ *   }
+ *
+ * Response 404 (not found):
+ *   {
+ *     "success": false,
+ *     "error": {
+ *       "type":    "WebhookNotFound",
+ *       "message": "Webhook 'wh_...' was not found."
+ *     }
+ *   }
  * Paused webhooks will not receive event deliveries until resumed.
  *
  * Response 200:
@@ -338,6 +345,8 @@ router.delete("/:webhookId", webhookSignatureAuth, (req, res, next) => {
 router.post("/:webhookId/pause", webhookSignatureAuth, (req, res, next) => {
   try {
     const { webhookId } = req.params;
+
+    // Verify the webhook exists before attempting to pause
     const existing = webhookStore.find(webhookId);
     if (!existing) {
       return next(
@@ -350,6 +359,9 @@ router.post("/:webhookId/pause", webhookSignatureAuth, (req, res, next) => {
         ),
       );
     }
+
+    const updated = webhookStore.updateStatus(webhookId, "paused");
+    return success(res, toWebhookListItem(updated));
     webhookStore.updateStatus(webhookId, "paused");
     return success(res, { webhookId, status: "paused" });
   } catch (err) {
@@ -360,6 +372,29 @@ router.post("/:webhookId/pause", webhookSignatureAuth, (req, res, next) => {
 /**
  * POST /webhooks/:webhookId/resume
  *
+ * Resume a webhook by setting its status back to "active".
+ * Resumed webhooks will receive events during delivery.
+ *
+ * Response 200 (success):
+ *   {
+ *     "success": true,
+ *     "data": {
+ *       "webhookId": "wh_...",
+ *       "status": "active",
+ *       "url": "https://...",
+ *       "events": [...],
+ *       "createdAt": "..."
+ *     }
+ *   }
+ *
+ * Response 404 (not found):
+ *   {
+ *     "success": false,
+ *     "error": {
+ *       "type":    "WebhookNotFound",
+ *       "message": "Webhook 'wh_...' was not found."
+ *     }
+ *   }
  * Resume a paused webhook by setting its status back to "active".
  *
  * Response 200:
@@ -370,6 +405,8 @@ router.post("/:webhookId/pause", webhookSignatureAuth, (req, res, next) => {
 router.post("/:webhookId/resume", webhookSignatureAuth, (req, res, next) => {
   try {
     const { webhookId } = req.params;
+
+    // Verify the webhook exists before attempting to resume
     const existing = webhookStore.find(webhookId);
     if (!existing) {
       return next(
@@ -382,6 +419,9 @@ router.post("/:webhookId/resume", webhookSignatureAuth, (req, res, next) => {
         ),
       );
     }
+
+    const updated = webhookStore.updateStatus(webhookId, "active");
+    return success(res, toWebhookListItem(updated));
     webhookStore.updateStatus(webhookId, "active");
     return success(res, { webhookId, status: "active" });
   } catch (err) {
